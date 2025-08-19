@@ -9,6 +9,7 @@ pub struct Config {
     pub token: String,
     pub limit: u32,
     pub concurrency: usize,
+    pub max_notif: usize, // <--- ajouté
 }
 
 impl Config {
@@ -22,12 +23,17 @@ impl Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(8);
+        let max_notif = env::var("MAX_NOTIF")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5); // <--- défaut 5
 
         Ok(Self {
             url,
             token,
             limit,
             concurrency,
+            max_notif,
         })
     }
 }
