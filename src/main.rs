@@ -39,19 +39,6 @@ fn urgency_for_severity(sev: Severity) -> Urgency {
     }
 }
 
-/// Ne garder que `max` problèmes les plus **sévères**, puis les plus **récents**.
-fn pick_top(problems: &mut Vec<zbx::types::Problem>, max: usize) {
-    problems.sort_unstable_by(|a, b| {
-        // Priorité: UNACK d’abord, puis sévérité desc, puis horodatage desc
-        (a.acknowledged as u8).cmp(&(b.acknowledged as u8)) // false(0) < true(1) => UNACK first
-            .then(b.severity.cmp(&a.severity))
-            .then(b.clock.cmp(&a.clock))
-    });
-    if problems.len() > max {
-        problems.truncate(max);
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // --- Config API/Zabbix
