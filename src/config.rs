@@ -26,7 +26,7 @@ impl Config {
         let max_notif = env::var("MAX_NOTIF")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(5); // <--- défaut 5
+            .unwrap_or(10); // <--- défaut 5
 
         Ok(Self {
             url,

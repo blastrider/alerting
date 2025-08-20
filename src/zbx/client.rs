@@ -107,4 +107,15 @@ impl ZbxClient {
         }
         Ok(out)
     }
+        pub async fn active_unacknowledged_problems(&self, limit: u32) -> Result<Vec<Problem>> {
+        let params = serde_json::json!({
+            "output": ["eventid","name","severity","clock","objectid"],
+            "acknowledged": false, // <- clé : seulement non-acquittés
+            "recent": false,       // <- actif uniquement (pas les "récemment résolus")
+            "limit": limit,
+            "sortfield": ["eventid"],
+            "sortorder": "DESC"
+        });
+        self.call("problem.get", params, 1).await
+    }
 }

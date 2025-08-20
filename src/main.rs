@@ -68,7 +68,10 @@ async fn main() -> Result<()> {
     let open_label = env::var("NOTIFY_OPEN_LABEL").unwrap_or_else(|_| "Ouvrir".to_string());
 
     // 1) Récupérer les problèmes
-    let mut problems = client.recent_problems(cfg.limit).await?;
+    // let mut problems = client.recent_problems(cfg.limit).await?;
+    // APRÈS : seulement non-acquittés + actifs
+let mut problems = client.active_unacknowledged_problems(cfg.limit).await?;
+
 
     // 2) Ne garder que les N derniers “actifs” (tri: sévérité desc, horodatage desc)
     pick_top(&mut problems, cfg.max_notif);
