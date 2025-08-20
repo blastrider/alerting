@@ -12,7 +12,7 @@ mod ui;
 use config::Config;
 use domain::severity::Severity;
 use util::time::fmt_epoch_local;
-use zbx::ZbxClient;
+use zbx::{ZbxClient, AckFilter};
 use ui::notify::{compute_timeout, send_toast};
 
 /// Parse booléen d’ENV (1/true/yes/y, insensible à la casse).
@@ -42,9 +42,10 @@ fn urgency_for_severity(sev: Severity) -> Urgency {
 /// Ne garder que `max` problèmes les plus **sévères**, puis les plus **récents**.
 fn pick_top(problems: &mut Vec<zbx::types::Problem>, max: usize) {
     problems.sort_unstable_by(|a, b| {
-        b.severity
-            .cmp(&a.severity)   // sévérité décroissante
-            .then(b.clock.cmp(&a.clock)) // plus récent d'abord
+        // Priorité: UNACK d’abord, puis sévérité desc, puis horodatage desc
+        (a.acknowledged as u8).cmp(&(b.acknowledged as u8)) // false(0) < true(1) => UNACK first
+            .then(b.severity.cmp(&a.severity))
+            .then(b.clock.cmp(&a.clock))
     });
     if problems.len() > max {
         problems.truncate(max);
@@ -66,10 +67,21 @@ async fn main() -> Result<()> {
     let icon_path: Option<PathBuf> = env::var("NOTIFY_ICON").ok().map(PathBuf::from);
     let open_fmt = env::var("ZBX_OPEN_URL_FMT").ok();
     let open_label = env::var("NOTIFY_OPEN_LABEL").unwrap_or_else(|_| "Ouvrir".to_string());
+    // Filtre ACK : "unack" (défaut), "ack", "all"
+let ack_filter = match env::var("ACK_FILTER")
+    .unwrap_or_else(|_| "unack".into())
+    .to_ascii_lowercase()
+    .as_str()
+{
+    "ack" => AckFilter::Ack,
+    "all" => AckFilter::All,
+    _ => AckFilter::Unack,
+};
+    // Notifier aussi les acquittées ? (par défaut non)
+    let notify_acked = matches!(env::var("NOTIFY_ACKED").ok().as_deref(), Some("1"|"true"|"yes"|"y"));
 
-    // 1) Récupérer seulement les problèmes actifs et NON acquittés
-    // (si tu as déjà ajouté cette méthode précédemment)
-    let problems = client.active_unacknowledged_problems(cfg.limit).await?;
+    // 1) Récupérer les problèmes actifs selon ACK_FILTER
+let problems = client.active_problems(cfg.limit, ack_filter).await?;
 
 
 // 2) Résoudre les hôtes (parallélisé) pour TOUS les problèmes récupérés
@@ -93,7 +105,9 @@ async fn main() -> Result<()> {
 
     // 4) Ne garder que les MAX_NOTIF plus pertinents (sévérité desc, horodatage desc)
     rows.sort_unstable_by(|(a, _), (b, _)| {
-        b.severity.cmp(&a.severity).then(b.clock.cmp(&a.clock))
+        (a.acknowledged as u8).cmp(&(b.acknowledged as u8))
+            .then(b.severity.cmp(&a.severity))
+            .then(b.clock.cmp(&a.clock))
     });
     if rows.len() > cfg.max_notif {
         rows.truncate(cfg.max_notif);
@@ -110,14 +124,22 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|| format!("(horodatage invalide: {})", p.clock));
         let when_local = fmt_epoch_local(p.clock);
 
-        // Console (pour logs)
+        let ack_mark = if p.acknowledged { "ACK" } else { "UNACK" };
         println!(
-            "Problem #{} | Host: {} | Severity: {} ({}) | Name: {} | At: {}",
-            p.eventid, host, p.severity, sev, p.name, when
+            "Problem #{} | {} | Host: {} | Severity: {} ({}) | Name: {} | At: {}",
+            p.eventid, ack_mark, host, p.severity, sev, p.name, when
         );
 
-        // Notification
-        let summary = format!("Zabbix: {sev} – {host}");
+
+        // Notification (option : on ignore les acquittées si NOTIFY_ACKED n’est pas activé)
+        if p.acknowledged && !notify_acked {
+            continue;
+        }
+        let summary = if p.acknowledged {
+            format!("Zabbix: [ACK] {sev} – {host}")
+        } else {
+            format!("Zabbix: {sev} – {host}")
+        };
         let body = format!("{}\nEvent: {}\nQuand: {}", p.name, p.eventid, when_local);
         let urgency = urgency_for_severity(sev);
         let action_url = make_open_url(open_fmt.as_deref(), &p.eventid);

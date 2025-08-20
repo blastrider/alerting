@@ -14,6 +14,12 @@ pub struct ZbxClient {
     url: String,
     token: String,
 }
+#[derive(Clone, Copy, Debug)]
+pub enum AckFilter {
+    Unack,
+    Ack,
+    All,
+}
 
 impl ZbxClient {
     pub fn new(url: &str, token: &str) -> Result<Self> {
@@ -44,34 +50,6 @@ impl ZbxClient {
             );
         }
         env.result.ok_or_else(|| anyhow::anyhow!("Zabbix API: missing result field"))
-    }
-
-    /// Récupère les problèmes récents (tri décroissant par eventid).
-    pub async fn recent_problems(&self, limit: u32) -> Result<Vec<Problem>> {
-        let params = json!({
-            "output": ["eventid","name","severity","clock","objectid"],
-            "recent": true,
-            "limit": limit,
-            "sortfield": ["eventid"],
-            "sortorder": "DESC"
-        });
-        self.call("problem.get", params, 1).await
-    }
-
-    /// Renvoie le nom d’hôte pour un eventid (None si absent).
-    pub async fn host_for_event(&self, eventid: &str) -> Result<Option<String>> {
-        let params = json!({
-            "output": ["eventid","clock"],
-            "selectHosts": ["host","name"],
-            "eventids": eventid
-        });
-
-        let result: Vec<EventWithHosts> = self.call("event.get", params, 2).await?;
-        let host = result
-            .first()
-            .and_then(|e| e.hosts.first())
-            .and_then(|h| h.name.clone().or(h.host.clone())); // Option<String>
-        Ok(host)
     }
 
     /// Résout les hôtes pour une liste d'eventids, avec limite de parallélisme.
@@ -112,15 +90,21 @@ impl ZbxClient {
         }
         Ok(out)
     }
-        pub async fn active_unacknowledged_problems(&self, limit: u32) -> Result<Vec<Problem>> {
-        let params = serde_json::json!({
-            "output": ["eventid","name","severity","clock","objectid"],
-            "acknowledged": false, // <- clé : seulement non-acquittés
-            "recent": false,       // <- actif uniquement (pas les "récemment résolus")
+
+    /// Problèmes actifs (non résolus), avec filtre ACK.
+    pub async fn active_problems(&self, limit: u32, ack: AckFilter) -> Result<Vec<Problem>> {
+        let mut params = json!({
+            "output": ["eventid","name","severity","clock","objectid","acknowledged"],
+            "recent": false, // UNRESOLVED seulement (cf. doc)
             "limit": limit,
             "sortfield": ["eventid"],
             "sortorder": "DESC"
         });
+        match ack {
+            AckFilter::Unack => { params["acknowledged"] = json!(false); }
+            AckFilter::Ack   => { params["acknowledged"] = json!(true);  }
+            AckFilter::All   => { /* ne rien ajouter */ }
+        }
         self.call("problem.get", params, 1).await
     }
     pub async fn host_meta_for_event(&self, eventid: &str) -> Result<Option<HostMeta>> {
@@ -141,4 +125,5 @@ impl ZbxClient {
 
     Ok(meta)
 }
+
 }

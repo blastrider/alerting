@@ -1,5 +1,6 @@
 pub mod client;
 pub mod types;
 
-pub use client::ZbxClient;
+
+pub use client::{ZbxClient, AckFilter};
 

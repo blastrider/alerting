@@ -34,6 +34,8 @@ pub struct Problem {
     #[serde(rename = "objectid")]
     #[allow(dead_code)]
     pub _objectid: Option<String>, // non utilisé dans l'affichage
+        #[serde(default, deserialize_with = "de_bool_from_str_or_int")]
+    pub acknowledged: bool, // "0"/"1" ou 0/1 -> bool
 }
 
 /// `event.get` avec hôtes.
@@ -108,4 +110,27 @@ where
         U8OrStrOrNull::Str(s) => s.parse::<u8>().map(Some).map_err(de::Error::custom),
         U8OrStrOrNull::Null => Ok(None),
     }
+}
+
+fn de_bool_from_str_or_int<'de, D>(de: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Boolish {
+        B(bool),
+        U(u8),
+        S(String),
+        Null,
+    }
+    Ok(match Boolish::deserialize(de)? {
+        Boolish::B(b) => b,
+        Boolish::U(n) => n != 0,
+        Boolish::S(s) => match s.as_str() {
+            "1" | "true" | "True" | "TRUE" => true,
+            _ => false,
+        },
+        Boolish::Null => false,
+    })
 }
