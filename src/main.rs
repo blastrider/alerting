@@ -67,24 +67,41 @@ async fn main() -> Result<()> {
     let open_fmt = env::var("ZBX_OPEN_URL_FMT").ok();
     let open_label = env::var("NOTIFY_OPEN_LABEL").unwrap_or_else(|_| "Ouvrir".to_string());
 
-    // 1) Récupérer les problèmes
-    // let mut problems = client.recent_problems(cfg.limit).await?;
-    // APRÈS : seulement non-acquittés + actifs
-let mut problems = client.active_unacknowledged_problems(cfg.limit).await?;
+    // 1) Récupérer seulement les problèmes actifs et NON acquittés
+    // (si tu as déjà ajouté cette méthode précédemment)
+    let problems = client.active_unacknowledged_problems(cfg.limit).await?;
 
 
-    // 2) Ne garder que les N derniers “actifs” (tri: sévérité desc, horodatage desc)
-    pick_top(&mut problems, cfg.max_notif);
-
-    // 3) Résoudre les hôtes (parallélisé) UNIQUEMENT pour ces N éléments
+// 2) Résoudre les hôtes (parallélisé) pour TOUS les problèmes récupérés
     let eventids: Vec<String> = problems.iter().map(|p| p.eventid.clone()).collect();
-    let hosts = client
-        .resolve_hosts_concurrent(&eventids, cfg.concurrency)
-        .await?;
+     let hosts = client
+         .resolve_hosts_concurrent(&eventids, cfg.concurrency)
+         .await?;
 
-    // 4) Affichage + notifications (seulement ces N éléments)
-    for (p, host_opt) in problems.into_iter().zip(hosts.into_iter()) {
-        let host = host_opt.as_deref().unwrap_or("-");
+    // 3) Zipper, filtrer les hôtes désactivés (status == Some(1)), retirer ceux sans hôte
+    let mut rows: Vec<_> = problems
+        .into_iter()
+        .zip(hosts.into_iter())
+        .filter_map(|(p, hm)| {
+            let hm = hm?;
+            match hm.status {
+                Some(1) => None,        // désactivé -> on ignore
+                _ => Some((p, hm)),      // activé ou inconnu -> on garde
+            }
+        })
+        .collect();
+
+    // 4) Ne garder que les MAX_NOTIF plus pertinents (sévérité desc, horodatage desc)
+    rows.sort_unstable_by(|(a, _), (b, _)| {
+        b.severity.cmp(&a.severity).then(b.clock.cmp(&a.clock))
+    });
+    if rows.len() > cfg.max_notif {
+        rows.truncate(cfg.max_notif);
+    }
+
+    // 5) Affichage + notifications
+    for (p, hm) in rows {
+        let host = hm.display_name.as_str();
         let sev = Severity::from(p.severity);
         let when = Local
             .timestamp_opt(p.clock, 0)

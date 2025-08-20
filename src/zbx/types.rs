@@ -49,6 +49,16 @@ pub struct Host {
     pub host: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
+    // Zabbix peut renvoyer "0"/"1" (string) ou 0/1 (int) selon versions/widgets.
+    #[serde(default, deserialize_with = "de_opt_u8_from_str_or_int")]
+    pub status: Option<u8>, // 0 = enabled, 1 = disabled
+}
+
+/// Métadonnées d’hôte utilisées par le binaire (nom affichable + statut).
+#[derive(Debug, Clone)]
+pub struct HostMeta {
+    pub display_name: String,
+    pub status: Option<u8>,
 }
 
 /// Payload interne (privé au client) pour JSON-RPC.
@@ -79,4 +89,23 @@ where
     let s = String::deserialize(deserializer)?;
     s.parse::<u8>()
         .map_err(|e| de::Error::custom(format!("severity invalide '{s}': {e}")))
+}
+
+// --- helper: Option<u8> <- string/int/null ---
+fn de_opt_u8_from_str_or_int<'de, D>(de: D) -> Result<Option<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum U8OrStrOrNull {
+        U8(u8),
+        Str(String),
+        Null,
+    }
+    match U8OrStrOrNull::deserialize(de)? {
+        U8OrStrOrNull::U8(v) => Ok(Some(v)),
+        U8OrStrOrNull::Str(s) => s.parse::<u8>().map(Some).map_err(de::Error::custom),
+        U8OrStrOrNull::Null => Ok(None),
+    }
 }

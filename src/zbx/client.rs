@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::{sync::Semaphore, task::JoinSet};
 
-use super::types::{EventWithHosts, Problem, RpcRequest, ZbxEnvelope};
+use super::types::{EventWithHosts, HostMeta, Problem, RpcRequest, ZbxEnvelope};
 
 /// Client Zabbix minimaliste et clonable.
 #[derive(Clone)]
@@ -79,7 +79,7 @@ impl ZbxClient {
         &self,
         eventids: &[String],
         max_concurrency: usize,
-    ) -> Result<Vec<Option<String>>> {
+    ) -> Result<Vec<Option<HostMeta>>> {
         let sem = Arc::new(Semaphore::new(max_concurrency.max(1)));
         let mut joins = JoinSet::new();
 
@@ -94,13 +94,18 @@ impl ZbxClient {
                     Err(_) => return (idx, None),
                 };
                 let _keep_alive = permit; // garde le slot jusqu'à la fin de la tâche
-
-                let host = this.host_for_event(&eid).await.unwrap_or(None);
-                (idx, host)
+                let meta = match this.host_meta_for_event(&eid).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("(warn) event {}: échec host_meta_for_event: {e}", &eid);
+                        None
+                    }
+                };
+                (idx, meta)
             });
         }
 
-        let mut out = vec![None; eventids.len()];
+        let mut out: Vec<Option<HostMeta>> = vec![None; eventids.len()];
         while let Some(res) = joins.join_next().await {
             let (idx, host) = res?; // propage JoinError en anyhow::Error
             out[idx] = host;
@@ -118,4 +123,22 @@ impl ZbxClient {
         });
         self.call("problem.get", params, 1).await
     }
+    pub async fn host_meta_for_event(&self, eventid: &str) -> Result<Option<HostMeta>> {
+    let params = json!({
+        "output": ["eventid","clock"],
+        "selectHosts": ["host","name","status"], // on récupère aussi le status
+        "eventids": eventid
+    });
+
+    let result: Vec<EventWithHosts> = self.call("event.get", params, 2).await?;
+    let meta = result
+        .first()
+        .and_then(|e| e.hosts.first())
+        .map(|h| HostMeta {
+            display_name: h.name.clone().or(h.host.clone()).unwrap_or_else(|| "-".into()),
+            status: h.status, // Some(0|1) ou None
+        });
+
+    Ok(meta)
+}
 }
