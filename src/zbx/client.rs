@@ -107,6 +107,37 @@ impl ZbxClient {
         }
         self.call("problem.get", params, 1).await
     }
+
+
+    /// Appel générique event.acknowledge (bitmask d'actions).
+    async fn event_update(&self, eventids: &[&str], action: i32, message: Option<&str>) -> Result<Value> {
+        let mut params = json!({ "eventids": eventids, "action": action });
+        if let Some(msg) = message {
+            if !msg.is_empty() {
+                // si on met un message, ajouter aussi le bit 'add message' si absent
+                // (4) : ack+msg => 6, unack+msg => 20, etc.  :contentReference[oaicite:3]{index=3}
+                params["message"] = json!(msg);
+            }
+        }
+        self.call("event.acknowledge", params, 777).await
+    }
+
+    /// Ack simple ou avec message (bitmask: 2 [+4 si message]).
+    pub async fn ack_event(&self, eventid: &str, message: Option<String>) -> Result<()> {
+        let has_msg = message.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+        let action = if has_msg { 2 + 4 } else { 2 };
+        let _ = self.event_update(&[eventid], action, message.as_deref()).await?;
+        Ok(())
+    }
+
+    /// Unack simple ou avec message (bitmask: 16 [+4 si message]).  :contentReference[oaicite:4]{index=4}
+    pub async fn unack_event(&self, eventid: &str, message: Option<String>) -> Result<()> {
+        let has_msg = message.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+        let action = if has_msg { 16 + 4 } else { 16 };
+        let _ = self.event_update(&[eventid], action, message.as_deref()).await?;
+        Ok(())
+    }
+
     pub async fn host_meta_for_event(&self, eventid: &str) -> Result<Option<HostMeta>> {
     let params = json!({
         "output": ["eventid","clock"],

@@ -7,6 +7,7 @@ use domain::severity::Severity;
 use util::time::fmt_epoch_local;
 use zbx::ZbxClient;
 use ui::notify::{compute_timeout, send_toast};
+use ui::notify::AckControls;
 
 mod config;
 mod domain;
@@ -110,6 +111,14 @@ async fn main() -> Result<()> {
             None,
             action_url.as_deref(),
             &cfg.notify_open_label,
+            Some(AckControls{
+                client: client.clone(),
+                eventid: p.eventid.clone(),
+                ask_message: true,                 // ouvre un prompt texte (facultatif)
+                allow_unack: p.acknowledged,       // si déjà ACK, proposer "Unack"
+                ack_label: None,
+                unack_label: None,
+            }),
         );
     }
 
