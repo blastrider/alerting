@@ -111,7 +111,11 @@ impl ZbxClient {
 
     /// Appel générique event.acknowledge (bitmask d'actions).
     async fn event_update(&self, eventids: &[&str], action: i32, message: Option<&str>) -> Result<Value> {
-        let mut params = json!({ "eventids": eventids, "action": action });
+        // Convertit chaque eventid en entier si possible (sinon string)
+        let ids_json: Vec<Value> = eventids.iter()
+            .map(|e| e.parse::<i64>().map(Value::from).unwrap_or_else(|_| Value::from(*e)))
+            .collect();
+        let mut params = json!({ "eventids": ids_json, "action": action });
         if let Some(msg) = message {
             if !msg.is_empty() {
                 // si on met un message, ajouter aussi le bit 'add message' si absent
@@ -119,7 +123,9 @@ impl ZbxClient {
                 params["message"] = json!(msg);
             }
         }
-        self.call("event.acknowledge", params, 777).await
+        let res = self.call::<Value>("event.acknowledge", params, 777).await?;
+        eprintln!("[zbx] event.acknowledge OK: {}", res);
+       Ok(res)
     }
 
     /// Ack simple ou avec message (bitmask: 2 [+4 si message]).
@@ -127,6 +133,7 @@ impl ZbxClient {
         let has_msg = message.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
         let action = if has_msg { 2 + 4 } else { 2 };
         let _ = self.event_update(&[eventid], action, message.as_deref()).await?;
+        eprintln!("[zbx] ACK sent eid={} msg={}", eventid, has_msg);
         Ok(())
     }
 
@@ -135,6 +142,7 @@ impl ZbxClient {
         let has_msg = message.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
         let action = if has_msg { 16 + 4 } else { 16 };
         let _ = self.event_update(&[eventid], action, message.as_deref()).await?;
+        eprintln!("[zbx] UNACK sent eid={} msg={}", eventid, has_msg);
         Ok(())
     }
 
