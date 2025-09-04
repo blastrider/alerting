@@ -1,0 +1,932 @@
+# ./Cargo.toml
+[package]
+name = "alerting"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["clock"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+notify-rust = "4"
+toml = "0.8"
+# ./src/config/file.rs
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::{fs, path::Path};
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct FileConfig {
+    pub url: Option<String>,
+    pub token: Option<String>,
+    pub limit: Option<u32>,
+    pub concurrency: Option<usize>,
+    pub max_notif: Option<usize>,
+}
+
+impl FileConfig {
+    /// Charge le fichier TOML si présent, sinon Ok(None)
+    pub fn load_from(path: &Path) -> Result<Option<Self>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let txt = fs::read_to_string(path)
+            .with_context(|| format!("Lecture fichier config: {}", path.display()))?;
+        let cfg: FileConfig = toml::from_str(&txt)
+            .with_context(|| format!("Parse TOML: {}", path.display()))?;
+        Ok(Some(cfg))
+    }
+}
+# ./src/config.rs
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::{
+    env,
+    fs,
+    path::{Path, PathBuf},
+};
+
+use crate::zbx::AckFilter;
+
+/// Configuration finale, prête à l'emploi.
+#[derive(Debug, Clone)]
+pub struct Config {
+    // Zabbix API
+    pub url: String,
+    pub token: String,
+    pub limit: u32,
+    pub concurrency: usize,
+    pub ack_filter: AckFilter,
+
+    // Sélection / volume
+    pub max_notif: usize,
+
+    // Notifications
+    pub notify_appname: String,
+    pub notify_sticky: bool,
+    pub notify_timeout_ms: Option<u32>,
+    pub notify_timeout_default: bool,
+    pub notify_icon: Option<PathBuf>,
+    pub notify_open_label: String,
+    pub notify_acked: bool,
+
+    // Action "Ouvrir"
+    pub zbx_open_url_fmt: Option<String>,
+}
+
+// -----------------------------
+// Chargement fichier (TOML)
+// -----------------------------
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct FileConfig {
+    zabbix: Option<Zabbix>,
+    notify: Option<Notify>,
+    app: Option<App>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct Zabbix {
+    url: Option<String>,
+    token: Option<String>,
+    limit: Option<u32>,
+    concurrency: Option<usize>,
+    ack_filter: Option<String>,       // "unack" | "ack" | "all"
+    open_url_fmt: Option<String>,     // ex: "https://...&filter_eventid={eventid}"
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct Notify {
+    appname: Option<String>,          // NOTIFY_APPNAME
+    sticky: Option<bool>,             // NOTIFY_STICKY
+    timeout_ms: Option<u32>,          // NOTIFY_TIMEOUT_MS
+    timeout_default: Option<bool>,    // NOTIFY_TIMEOUT_DEFAULT
+    icon: Option<String>,             // NOTIFY_ICON (chemin)
+    open_label: Option<String>,       // NOTIFY_OPEN_LABEL
+    notify_acked: Option<bool>,       // NOTIFY_ACKED
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct App {
+    max_notif: Option<usize>,         // MAX_NOTIF
+}
+
+impl FileConfig {
+    fn load_from(path: &Path) -> Result<Option<Self>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let txt = fs::read_to_string(path)
+            .with_context(|| format!("Lecture fichier config: {}", path.display()))?;
+        let cfg: FileConfig = toml::from_str(&txt)
+            .with_context(|| format!("Parse TOML: {}", path.display()))?;
+        Ok(Some(cfg))
+    }
+}
+
+// -----------------------------
+// Merge ENV > fichier > défauts
+// -----------------------------
+
+impl Config {
+    pub fn load() -> Result<Self> {
+        // 0) Fichier
+        let cfg_path = env::var("CONFIG_FILE").unwrap_or_else(|_| "config.toml".to_string());
+        let file_cfg = FileConfig::load_from(Path::new(&cfg_path))?.unwrap_or_default();
+
+        // Accès rapides
+        let z = file_cfg.zabbix.unwrap_or_default();
+        let n = file_cfg.notify.unwrap_or_default();
+        let a = file_cfg.app.unwrap_or_default();
+
+        // 1) Zabbix
+        let url = pick_str("ZBX_URL", z.url, "https://zabbix.example.com/api_jsonrpc.php");
+        let token = env::var("ZBX_TOKEN").ok().or(z.token)
+            .context("Token requis (ZBX_TOKEN ou config.toml [zabbix].token)")?;
+        let limit = pick_parse_u32("LIMIT", z.limit, 20);
+        let concurrency = pick_parse_usize("CONCURRENCY", z.concurrency, 8);
+        let ack_filter = pick_ack_filter(z.ack_filter);
+
+        // 2) App
+        let max_notif = pick_parse_usize("MAX_NOTIF", a.max_notif, 5);
+
+        // 3) Notifications
+        let notify_appname = pick_str("NOTIFY_APPNAME", n.appname, "Innlog Agent");
+        let notify_sticky = pick_bool("NOTIFY_STICKY", n.sticky, false);
+        let notify_timeout_ms = pick_opt_parse_u32("NOTIFY_TIMEOUT_MS", n.timeout_ms);
+        let notify_timeout_default = pick_bool("NOTIFY_TIMEOUT_DEFAULT", n.timeout_default, false);
+        let notify_icon = pick_opt_path("NOTIFY_ICON", n.icon);
+        let notify_open_label = pick_str("NOTIFY_OPEN_LABEL", n.open_label, "Ouvrir");
+        let notify_acked = pick_bool("NOTIFY_ACKED", n.notify_acked, false);
+
+        // 4) URL "Ouvrir"
+        let zbx_open_url_fmt = env::var("ZBX_OPEN_URL_FMT").ok().or(z.open_url_fmt);
+
+        Ok(Self {
+            url,
+            token,
+            limit,
+            concurrency,
+            ack_filter,
+            max_notif,
+            notify_appname,
+            notify_sticky,
+            notify_timeout_ms,
+            notify_timeout_default,
+            notify_icon,
+            notify_open_label,
+            notify_acked,
+            zbx_open_url_fmt,
+        })
+    }
+}
+
+// -----------------------------
+// Helpers de merge / parse
+// -----------------------------
+
+fn pick_str(env_key: &str, file_val: Option<String>, default_: &str) -> String {
+    env::var(env_key).ok().or(file_val).unwrap_or_else(|| default_.to_string())
+}
+fn pick_bool(env_key: &str, file_val: Option<bool>, default_: bool) -> bool {
+    match env::var(env_key) {
+        Ok(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "y"),
+        Err(_) => file_val.unwrap_or(default_),
+    }
+}
+fn pick_parse_u32(env_key: &str, file_val: Option<u32>, default_: u32) -> u32 {
+    env::var(env_key).ok().and_then(|s| s.parse().ok()).or(file_val).unwrap_or(default_)
+}
+fn pick_parse_usize(env_key: &str, file_val: Option<usize>, default_: usize) -> usize {
+    env::var(env_key).ok().and_then(|s| s.parse().ok()).or(file_val).unwrap_or(default_)
+}
+fn pick_opt_parse_u32(env_key: &str, file_val: Option<u32>) -> Option<u32> {
+    match env::var(env_key) {
+        Ok(s) => s.parse().ok(),
+        Err(_) => file_val,
+    }
+}
+fn pick_opt_path(env_key: &str, file_val: Option<String>) -> Option<PathBuf> {
+    env::var(env_key).ok().map(PathBuf::from).or_else(|| file_val.map(PathBuf::from))
+}
+fn pick_ack_filter(file_val: Option<String>) -> AckFilter {
+    let src = env::var("ACK_FILTER").ok().or(file_val).unwrap_or_else(|| "unack".into());
+    match src.to_ascii_lowercase().as_str() {
+        "ack" => AckFilter::Ack,
+        "all" => AckFilter::All,
+        _     => AckFilter::Unack,
+    }
+}
+# ./src/domain/mod.rs
+pub mod severity;
+# ./src/domain/severity.rs
+use std::fmt;
+
+/// Enum typée pour la sévérité Zabbix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    NotClassified,
+    Information,
+    Warning,
+    Average,
+    High,
+    Disaster,
+    Unknown(u8),
+}
+
+impl From<u8> for Severity {
+    fn from(v: u8) -> Self {
+        match v {
+            0 => Self::NotClassified,
+            1 => Self::Information,
+            2 => Self::Warning,
+            3 => Self::Average,
+            4 => Self::High,
+            5 => Self::Disaster,
+            x => Self::Unknown(x),
+        }
+    }
+}
+
+impl Severity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::NotClassified => "Not classified",
+            Severity::Information => "Information",
+            Severity::Warning => "Warning",
+            Severity::Average => "Average",
+            Severity::High => "High",
+            Severity::Disaster => "Disaster",
+            Severity::Unknown(_) => "Unknown",
+        }
+    }
+}
+
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+# ./src/main.rs
+use anyhow::Result;
+use chrono::{Local, TimeZone};
+use notify_rust::Urgency;
+
+use config::Config;
+use domain::severity::Severity;
+use util::time::fmt_epoch_local;
+use zbx::ZbxClient;
+use ui::notify::{compute_timeout, send_toast};
+use ui::notify::AckControls;
+
+use tokio::runtime::Handle;
+mod config;
+mod domain;
+mod util;
+mod zbx;
+mod ui;
+
+/// Construit l’URL "ouvrir" à partir d’un format ENV/Fichier, ex:
+///   zbx_open_url_fmt="https://...&filter_eventid={eventid}"
+fn make_open_url(fmt: Option<&str>, eventid: &str) -> Option<String> {
+    fmt.map(|f| f.replace("{eventid}", eventid))
+}
+
+fn urgency_for_severity(sev: Severity) -> Urgency {
+    match sev {
+        Severity::Disaster | Severity::High => Urgency::Critical,
+        Severity::Average | Severity::Warning => Urgency::Normal,
+        Severity::Information | Severity::NotClassified => Urgency::Low,
+        Severity::Unknown(_) => Urgency::Normal,
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // --- Config unifiée (ENV > fichier > défauts)
+    let cfg = Config::load()?;
+
+    // --- Client Zabbix
+    let client = ZbxClient::new(&cfg.url, &cfg.token)?;
+
+    // --- Timeout notifications
+    let timeout = compute_timeout(cfg.notify_sticky, cfg.notify_timeout_ms, cfg.notify_timeout_default);
+
+    // 1) Récupérer les problèmes actifs selon ACK_FILTER
+    let problems = client.active_problems(cfg.limit, cfg.ack_filter).await?;
+
+    // 2) Résoudre les hôtes (parallélisé) pour TOUS les problèmes récupérés
+    let eventids: Vec<String> = problems.iter().map(|p| p.eventid.clone()).collect();
+    let hosts = client.resolve_hosts_concurrent(&eventids, cfg.concurrency).await?;
+
+    // 3) Zipper + filtrer hôtes désactivés
+    let mut rows: Vec<_> = problems
+        .into_iter()
+        .zip(hosts.into_iter())
+        .filter_map(|(p, hm)| {
+            let hm = hm?;
+            match hm.status {
+                Some(1) => None,        // désactivé -> on ignore
+                _ => Some((p, hm)),      // activé ou inconnu -> on garde
+            }
+        })
+        .collect();
+
+    // 4) Limiter aux MAX_NOTIF (tri par ack, sévérité, horodatage)
+    rows.sort_unstable_by(|(a, _), (b, _)| {
+        (a.acknowledged as u8)
+            .cmp(&(b.acknowledged as u8))
+            .then(b.severity.cmp(&a.severity))
+            .then(b.clock.cmp(&a.clock))
+    });
+    if rows.len() > cfg.max_notif {
+        rows.truncate(cfg.max_notif);
+    }
+
+    // 5) Affichage + notifications
+    for (p, hm) in rows {
+        let host = hm.display_name.as_str();
+        let sev = Severity::from(p.severity);
+        let when = Local.timestamp_opt(p.clock, 0).single()
+            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| format!("(horodatage invalide: {})", p.clock));
+        let when_local = fmt_epoch_local(p.clock);
+
+        let ack_mark = if p.acknowledged { "ACK" } else { "UNACK" };
+        println!(
+            "Problem #{} | {} | Host: {} | Severity: {} ({}) | Name: {} | At: {}",
+            p.eventid, ack_mark, host, p.severity, sev, p.name, when
+        );
+
+        // Notification : ignorer les acquittées si notify_acked = false
+        if p.acknowledged && !cfg.notify_acked {
+            continue;
+        }
+
+        let summary = if p.acknowledged {
+            format!("Zabbix: [ACK] {sev} – {host}")
+        } else {
+            format!("Zabbix: {sev} – {host}")
+        };
+        let body = format!("{}\nEvent: {}\nQuand: {}", p.name, p.eventid, when_local);
+        let urgency = urgency_for_severity(sev);
+        let action_url = make_open_url(cfg.zbx_open_url_fmt.as_deref(), &p.eventid);
+
+        let _ = send_toast(
+            &summary,
+            &body,
+            urgency,
+            timeout,
+            &cfg.notify_appname,
+            cfg.notify_icon.as_deref(),
+            None,
+            action_url.as_deref(),
+            &cfg.notify_open_label,
+            Some(AckControls{
+                handle: Handle::current(),
+                client: client.clone(),
+                eventid: p.eventid.clone(),
+                ask_message: true,                 // ouvre un prompt texte (facultatif)
+                allow_unack: p.acknowledged,       // si déjà ACK, proposer "Unack"
+                ack_label: None,
+                unack_label: None,
+            }),
+        );
+    }
+
+    Ok(())
+}
+# ./src/ui/mod.rs
+pub mod notify;
+# ./src/ui/notify.rs
+use anyhow::{Context, Result};
+use notify_rust::{Notification, Timeout, Urgency};
+use std::{path::Path, process::Command};
+use crate::zbx::ZbxClient;
+use anyhow::anyhow;
+use tokio::runtime::Handle;
+
+/// Contrôles Ack/Unack à insérer dans la notification.
+#[derive(Clone)]
+pub struct AckControls {
+    pub handle: Handle,
+    pub client: ZbxClient,
+    pub eventid: String,
+    /// Afficher un prompt pour message (optionnel) avant d'envoyer.
+    pub ask_message: bool,
+    /// Afficher aussi le bouton Unack si déjà ACK.
+    pub allow_unack: bool,
+    /// Libellés (fallbacks par défaut si None).
+    pub ack_label: Option<String>,
+    pub unack_label: Option<String>,
+}
+
+/// Affiche une notification système (Cinnamon/Mint).
+/// Si `action_open` est `Some(url)`, ajoute un bouton "open" qui lance `xdg-open url`.
+pub fn send_toast(
+    summary: &str,
+    body: &str,
+    urgency: Urgency,
+    timeout: Timeout,
+    appname: &str,
+    icon: Option<&Path>,
+    replace_id: Option<u32>,
+    action_open: Option<&str>,
+    action_open_label: &str,
+    ack_controls: Option<AckControls>,
+) -> Result<()> {
+    let mut builder = Notification::new();
+    builder
+        .summary(summary)
+        .body(body)
+        .appname(appname)
+        .urgency(urgency)
+        .timeout(timeout);
+
+    if let Some(icon_path) = icon {
+        builder.icon(&icon_path.to_string_lossy());
+    }
+    if let Some(id) = replace_id {
+        builder.id(id);
+    }
+    if action_open.is_some() {
+        builder.action("open", action_open_label);
+        builder.action("ignore", "Ignorer");
+    }
+
+    if ack_controls.is_some() {
+        let ac = ack_controls.as_ref().unwrap();
+        builder.action("ack", ac.ack_label.as_deref().unwrap_or("Ack"));
+        if ac.allow_unack {
+            builder.action("unack", ac.unack_label.as_deref().unwrap_or("Unack"));
+        }
+    }
+
+    let handle = builder
+        .show()
+        .context("échec d’affichage de la notification")?;
+
+    let url_opt = action_open.map(|s| s.to_string());
+    let ac_opt = ack_controls.clone();
+    handle.wait_for_action(move |action| {
+        eprintln!("(ui) action={action}");
+        match action {
+            "open" => {
+                if let Some(ref url) = url_opt {
+                    let _ = Command::new("xdg-open").arg(url).spawn();
+                }
+            }
+            "ack" => {
+                if let Some(ac) = ac_opt.clone() {
+                    let msg = if ac.ask_message { prompt_message().ok().flatten() } else { None };
+                    // On ne bloque pas le thread de notif : spawn async.
+                    let client = ac.client.clone();
+                    let eid = ac.eventid.clone();
+                    let h = ac.handle.clone();
+                    h.spawn(async move {
+                        eprintln!("(ui) ack clicked eid={}", eid);
+                        let has_msg = msg.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+                        // tentative avec message si présent
+                        let res = client.ack_event(&eid, msg).await;
+                        if let Err(e) = res {
+                            eprintln!("(ack failed) eid={} : {}", eid, e);
+                            // fallback : ack sans message si le rôle refuse les commentaires
+                            if has_msg {
+                                if let Err(e2) = client.ack_event(&eid, None).await {
+                                    eprintln!("(ack fallback no-msg failed) eid={} : {}", eid, e2);
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            "unack" => {
+                if let Some(ac) = ac_opt.clone() {
+                    let msg = if ac.ask_message { prompt_message().ok().flatten() } else { None };
+                    let client = ac.client.clone();
+                    let eid = ac.eventid.clone();
+                    let h = ac.handle.clone();
+                    h.spawn(async move {
+                        if let Err(e) = client.unack_event(&eid, msg).await {
+                            eprintln!("(unack failed) event {}: {}", eid, e);
+                        }
+                    });
+                }
+            }
+            "ignore" | "__closed" | "__timeout" => { /* no-op */ }
+            _ => { /* no-op */ }
+        }
+    });
+    Ok(())
+}
+
+/// Ouvre un prompt texte (`zenity --entry`) et retourne Some(message) si saisi.
+fn prompt_message() -> Result<Option<String>> {
+    // Nécessite zenity (Mint/Cinnamon l'a souvent).  :contentReference[oaicite:5]{index=5}
+    let output = Command::new("zenity")
+        .arg("--entry")
+        .arg("--title=Commentaire")
+        .arg("--text=Motif (facultatif) :")
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if s.is_empty() { Ok(None) } else { Ok(Some(s)) }
+        }
+        Ok(_) => Ok(None), // annulé/fermé
+        Err(e) => Err(anyhow!("zenity introuvable ou erreur: {e}")),
+    }
+}
+/// Calcule le timeout notify-osd selon trois flags.
+pub fn compute_timeout(sticky: bool, timeout_ms: Option<u32>, default_timeout: bool) -> Timeout {
+    if sticky {
+        Timeout::Never
+    } else if let Some(ms) = timeout_ms {
+        Timeout::Milliseconds(ms)
+    } else if default_timeout {
+        Timeout::Default
+    } else {
+        Timeout::Milliseconds(5_000)
+    }
+}
+# ./src/util/mod.rs
+pub mod time;
+# ./src/util/time.rs
+use chrono::{Local, TimeZone};
+
+/// Formatte un epoch (secondes) en heure locale lisible.
+pub fn fmt_epoch_local(sec: i64) -> String {
+    Local
+        .timestamp_opt(sec, 0)
+        .single()
+        .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| format!("(horodatage invalide: {sec})"))
+}
+# ./src/zbx/client.rs
+use anyhow::{bail, Context, Result};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+use serde::de::DeserializeOwned;
+use serde_json::{json, Value};
+use std::sync::Arc;
+use tokio::{sync::Semaphore, task::JoinSet};
+
+use super::types::{EventWithHosts, HostMeta, Problem, RpcRequest, ZbxEnvelope};
+
+/// Client Zabbix minimaliste et clonable.
+#[derive(Clone)]
+pub struct ZbxClient {
+    http: reqwest::Client,
+    url: String,
+    token: String,
+}
+#[derive(Clone, Copy, Debug)]
+pub enum AckFilter {
+    Unack,
+    Ack,
+    All,
+}
+
+impl ZbxClient {
+    pub fn new(url: &str, token: &str) -> Result<Self> {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json-rpc"));
+        let http = reqwest::Client::builder().default_headers(headers).build()?;
+        Ok(Self { http, url: url.to_string(), token: token.to_string() })
+    }
+
+    async fn call<T: DeserializeOwned>(&self, method: &str, params: Value, id: u32) -> Result<T> {
+        let payload = RpcRequest { jsonrpc: "2.0", method, params, id, auth: &self.token };
+
+        let resp = self.http.post(&self.url).json(&payload).send()
+            .await
+            .with_context(|| format!("HTTP POST to {}", self.url))?;
+
+        let status = resp.status();
+        let env: ZbxEnvelope<T> = resp.json()
+            .await
+            .with_context(|| format!("Decoding JSON response (HTTP {status})"))?;
+
+        if let Some(err) = env.error {
+            bail!(
+                "Zabbix API error {}: {}{}",
+                err.code,
+                err.message,
+                err.data.map(|d| format!(" – {d}")).unwrap_or_default()
+            );
+        }
+        env.result.ok_or_else(|| anyhow::anyhow!("Zabbix API: missing result field"))
+    }
+
+    /// Résout les hôtes pour une liste d'eventids, avec limite de parallélisme.
+    pub async fn resolve_hosts_concurrent(
+        &self,
+        eventids: &[String],
+        max_concurrency: usize,
+    ) -> Result<Vec<Option<HostMeta>>> {
+        let sem = Arc::new(Semaphore::new(max_concurrency.max(1)));
+        let mut joins = JoinSet::new();
+
+        for (idx, eid) in eventids.iter().cloned().enumerate() {
+            let sem = Arc::clone(&sem);
+            let this = self.clone();
+
+            joins.spawn(async move {
+                // Si la semaphore est fermée, on renvoie None proprement.
+                let permit = match sem.acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => return (idx, None),
+                };
+                let _keep_alive = permit; // garde le slot jusqu'à la fin de la tâche
+                let meta = match this.host_meta_for_event(&eid).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("(warn) event {}: échec host_meta_for_event: {e}", &eid);
+                        None
+                    }
+                };
+                (idx, meta)
+            });
+        }
+
+        let mut out: Vec<Option<HostMeta>> = vec![None; eventids.len()];
+        while let Some(res) = joins.join_next().await {
+            let (idx, host) = res?; // propage JoinError en anyhow::Error
+            out[idx] = host;
+        }
+        Ok(out)
+    }
+
+    /// Problèmes actifs (non résolus), avec filtre ACK.
+    pub async fn active_problems(&self, limit: u32, ack: AckFilter) -> Result<Vec<Problem>> {
+        let mut params = json!({
+            "output": ["eventid","name","severity","clock","objectid","acknowledged"],
+            "recent": false, // UNRESOLVED seulement (cf. doc)
+            "limit": limit,
+            "sortfield": ["eventid"],
+            "sortorder": "DESC"
+        });
+        match ack {
+            AckFilter::Unack => { params["acknowledged"] = json!(false); }
+            AckFilter::Ack   => { params["acknowledged"] = json!(true);  }
+            AckFilter::All   => { /* ne rien ajouter */ }
+        }
+        self.call("problem.get", params, 1).await
+    }
+
+
+    /// Appel générique event.acknowledge (bitmask d'actions).
+    async fn event_update(&self, eventids: &[&str], action: i32, message: Option<&str>) -> Result<Value> {
+        // Convertit chaque eventid en entier si possible (sinon string)
+        let ids_json: Vec<Value> = eventids.iter()
+            .map(|e| e.parse::<i64>().map(Value::from).unwrap_or_else(|_| Value::from(*e)))
+            .collect();
+        let mut params = json!({ "eventids": ids_json, "action": action });
+        if let Some(msg) = message {
+            if !msg.is_empty() {
+                // si on met un message, ajouter aussi le bit 'add message' si absent
+                // (4) : ack+msg => 6, unack+msg => 20, etc.  :contentReference[oaicite:3]{index=3}
+                params["message"] = json!(msg);
+            }
+        }
+        let res = self.call::<Value>("event.acknowledge", params, 777).await?;
+        eprintln!("[zbx] event.acknowledge OK: {}", res);
+       Ok(res)
+    }
+
+    /// Ack simple ou avec message (bitmask: 2 [+4 si message]).
+    pub async fn ack_event(&self, eventid: &str, message: Option<String>) -> Result<()> {
+        let has_msg = message.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+        let action = if has_msg { 2 + 4 } else { 2 };
+        let _ = self.event_update(&[eventid], action, message.as_deref()).await?;
+        eprintln!("[zbx] ACK sent eid={} msg={}", eventid, has_msg);
+        Ok(())
+    }
+
+    /// Unack simple ou avec message (bitmask: 16 [+4 si message]).  :contentReference[oaicite:4]{index=4}
+    pub async fn unack_event(&self, eventid: &str, message: Option<String>) -> Result<()> {
+        let has_msg = message.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+        let action = if has_msg { 16 + 4 } else { 16 };
+        let _ = self.event_update(&[eventid], action, message.as_deref()).await?;
+        eprintln!("[zbx] UNACK sent eid={} msg={}", eventid, has_msg);
+        Ok(())
+    }
+
+    pub async fn host_meta_for_event(&self, eventid: &str) -> Result<Option<HostMeta>> {
+    let params = json!({
+        "output": ["eventid","clock"],
+        "selectHosts": ["host","name","status"], // on récupère aussi le status
+        "eventids": eventid
+    });
+
+    let result: Vec<EventWithHosts> = self.call("event.get", params, 2).await?;
+    let meta = result
+        .first()
+        .and_then(|e| e.hosts.first())
+        .map(|h| HostMeta {
+            display_name: h.name.clone().or(h.host.clone()).unwrap_or_else(|| "-".into()),
+            status: h.status, // Some(0|1) ou None
+        });
+
+    Ok(meta)
+}
+
+}
+# ./src/zbx/models.rs
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Deserialize)]
+pub struct ZbxError {
+    pub code: i64,
+    pub message: String,
+    #[serde(default)]
+    pub data: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ZbxEnvelope<T> {
+    pub jsonrpc: String,
+    // IMPORTANT: pas de #[serde(default)] sur Option<T>
+    pub result: Option<T>,
+    pub error: Option<ZbxError>,
+    pub id: Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Problem {
+    pub eventid: String,
+    pub clock: String,    // epoch sec as string
+    pub severity: String, // numeric string 0..5
+    pub name: String,
+    #[serde(default)]
+    pub objectid: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EventWithHosts {
+    #[serde(default)]
+    pub hosts: Vec<Host>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Host {
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RpcRequest<'a> {
+    pub jsonrpc: &'static str,
+    pub method: &'a str,
+    pub params: Value,
+    pub id: u32,
+    pub auth: &'a str,
+}
+# ./src/zbx/mod.rs
+pub mod client;
+pub mod types;
+
+
+pub use client::{ZbxClient, AckFilter};
+# ./src/zbx/types.rs
+use serde::de::{self, Deserializer};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// Erreur Zabbix enveloppée par JSON-RPC.
+#[derive(Debug, Deserialize)]
+pub struct ZbxError {
+    pub code: i64,
+    pub message: String,
+    #[serde(default)]
+    pub data: Option<String>,
+}
+
+/// Enveloppe JSON-RPC générique.
+#[derive(Debug, Deserialize)]
+pub struct ZbxEnvelope<T> {
+    #[allow(dead_code)]
+    pub jsonrpc: String,
+    pub result: Option<T>,     // ne pas mettre #[serde(default)] ici
+    pub error: Option<ZbxError>,
+    #[allow(dead_code)]
+    pub id: Value,
+}
+
+/// Problème Zabbix tel que renvoyé par `problem.get`.
+#[derive(Debug, Deserialize)]
+pub struct Problem {
+    pub eventid: String,
+    #[serde(deserialize_with = "de_i64_from_str")]
+    pub clock: i64, // epoch sec en String -> i64
+    #[serde(deserialize_with = "de_u8_from_str")]
+    pub severity: u8, // "0".."5" -> u8
+    pub name: String,
+    #[serde(rename = "objectid")]
+    #[allow(dead_code)]
+    pub _objectid: Option<String>, // non utilisé dans l'affichage
+        #[serde(default, deserialize_with = "de_bool_from_str_or_int")]
+    pub acknowledged: bool, // "0"/"1" ou 0/1 -> bool
+}
+
+/// `event.get` avec hôtes.
+#[derive(Debug, Deserialize)]
+pub struct EventWithHosts {
+    #[serde(default)]
+    pub hosts: Vec<Host>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Host {
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    // Zabbix peut renvoyer "0"/"1" (string) ou 0/1 (int) selon versions/widgets.
+    #[serde(default, deserialize_with = "de_opt_u8_from_str_or_int")]
+    pub status: Option<u8>, // 0 = enabled, 1 = disabled
+}
+
+/// Métadonnées d’hôte utilisées par le binaire (nom affichable + statut).
+#[derive(Debug, Clone)]
+pub struct HostMeta {
+    pub display_name: String,
+    pub status: Option<u8>,
+}
+
+/// Payload interne (privé au client) pour JSON-RPC.
+#[derive(Serialize)]
+pub(crate) struct RpcRequest<'a> {
+    pub jsonrpc: &'static str,
+    pub method: &'a str,
+    pub params: Value,
+    pub id: u32,
+    pub auth: &'a str,
+}
+
+// ----------- helpers de désérialisation -----------
+
+fn de_i64_from_str<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    s.parse::<i64>()
+        .map_err(|e| de::Error::custom(format!("clock invalide '{s}': {e}")))
+}
+
+fn de_u8_from_str<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    s.parse::<u8>()
+        .map_err(|e| de::Error::custom(format!("severity invalide '{s}': {e}")))
+}
+
+// --- helper: Option<u8> <- string/int/null ---
+fn de_opt_u8_from_str_or_int<'de, D>(de: D) -> Result<Option<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum U8OrStrOrNull {
+        U8(u8),
+        Str(String),
+        Null,
+    }
+    match U8OrStrOrNull::deserialize(de)? {
+        U8OrStrOrNull::U8(v) => Ok(Some(v)),
+        U8OrStrOrNull::Str(s) => s.parse::<u8>().map(Some).map_err(de::Error::custom),
+        U8OrStrOrNull::Null => Ok(None),
+    }
+}
+
+fn de_bool_from_str_or_int<'de, D>(de: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Boolish {
+        B(bool),
+        U(u8),
+        S(String),
+        Null,
+    }
+    Ok(match Boolish::deserialize(de)? {
+        Boolish::B(b) => b,
+        Boolish::U(n) => n != 0,
+        Boolish::S(s) => match s.as_str() {
+            "1" | "true" | "True" | "TRUE" => true,
+            _ => false,
+        },
+        Boolish::Null => false,
+    })
+}

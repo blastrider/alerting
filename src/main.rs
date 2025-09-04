@@ -9,6 +9,7 @@ use zbx::ZbxClient;
 use ui::notify::{compute_timeout, send_toast};
 use ui::notify::AckControls;
 
+use tokio::runtime::Handle;
 mod config;
 mod domain;
 mod util;
@@ -37,6 +38,27 @@ async fn main() -> Result<()> {
 
     // --- Client Zabbix
     let client = ZbxClient::new(&cfg.url, &cfg.token)?;
+    // --- Mode CLI de test : `alerting ack <eventid> [message]` ou `alerting unack <eventid> [message]`
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(cmd) = args.get(0).map(|s| s.as_str()) {
+        match cmd {
+            "ack" => {
+                let eid = args.get(1).expect("usage: alerting ack <eventid> [message]");
+                let msg = args.get(2).cloned();
+                client.ack_event(eid, msg).await?;
+                println!("ACK OK for {}", eid);
+                return Ok(());
+            }
+            "unack" => {
+                let eid = args.get(1).expect("usage: alerting unack <eventid> [message]");
+                let msg = args.get(2).cloned();
+                client.unack_event(eid, msg).await?;
+                println!("UNACK OK for {}", eid);
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
 
     // --- Timeout notifications
     let timeout = compute_timeout(cfg.notify_sticky, cfg.notify_timeout_ms, cfg.notify_timeout_default);
@@ -112,6 +134,7 @@ async fn main() -> Result<()> {
             action_url.as_deref(),
             &cfg.notify_open_label,
             Some(AckControls{
+                handle: Handle::current(),
                 client: client.clone(),
                 eventid: p.eventid.clone(),
                 ask_message: true,                 // ouvre un prompt texte (facultatif)
