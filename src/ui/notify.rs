@@ -83,16 +83,17 @@ pub fn send_toast(
                     let eid = ac.eventid.clone();
                     let h = ac.handle.clone();
                     h.spawn(async move {
-                        eprintln!("(ui) ack clicked eid={}", eid);
+                        eprintln!("(ui) ack clicked eid={:#}", eid);
                         let has_msg = msg.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
                         // tentative avec message si présent
                         let res = client.ack_event(&eid, msg).await;
                         if let Err(e) = res {
-                            eprintln!("(ack failed) eid={} : {}", eid, e);
+                            eprintln!("(ack failed) eid={} : {:#}", eid, e);
                             // fallback : ack sans message si le rôle refuse les commentaires
                             if has_msg {
                                 if let Err(e2) = client.ack_event(&eid, None).await {
-                                    eprintln!("(ack fallback no-msg failed) eid={} : {}", eid, e2);
+                                    //eprintln!("(ack fallback no-msg failed) eid={} : {}", eid, e2);
+                                    eprintln!("(ack failed) eid={} : {:#}", eid, e2);
                                 }
                             }
                         }
@@ -107,7 +108,7 @@ pub fn send_toast(
                     let h = ac.handle.clone();
                     h.spawn(async move {
                         if let Err(e) = client.unack_event(&eid, msg).await {
-                            eprintln!("(unack failed) event {}: {}", eid, e);
+                            eprintln!("(unack failed) eid={} : {:#}", eid, e);
                         }
                     });
                 }
