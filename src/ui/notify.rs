@@ -3,10 +3,12 @@ use notify_rust::{Notification, Timeout, Urgency};
 use std::{path::Path, process::Command};
 use crate::zbx::ZbxClient;
 use anyhow::anyhow;
+use tokio::runtime::Handle;
 
 /// Contrôles Ack/Unack à insérer dans la notification.
 #[derive(Clone)]
 pub struct AckControls {
+    pub handle: Handle,
     pub client: ZbxClient,
     pub eventid: String,
     /// Afficher un prompt pour message (optionnel) avant d'envoyer.
@@ -66,6 +68,7 @@ pub fn send_toast(
     let url_opt = action_open.map(|s| s.to_string());
     let ac_opt = ack_controls.clone();
     handle.wait_for_action(move |action| {
+        eprintln!("(ui) action={action}");
         match action {
             "open" => {
                 if let Some(ref url) = url_opt {
@@ -78,9 +81,20 @@ pub fn send_toast(
                     // On ne bloque pas le thread de notif : spawn async.
                     let client = ac.client.clone();
                     let eid = ac.eventid.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = client.ack_event(&eid, msg).await {
-                            eprintln!("(ack failed) event {}: {}", eid, e);
+                    let h = ac.handle.clone();
+                    h.spawn(async move {
+                        eprintln!("(ui) ack clicked eid={}", eid);
+                        let has_msg = msg.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+                        // tentative avec message si présent
+                        let res = client.ack_event(&eid, msg).await;
+                        if let Err(e) = res {
+                            eprintln!("(ack failed) eid={} : {}", eid, e);
+                            // fallback : ack sans message si le rôle refuse les commentaires
+                            if has_msg {
+                                if let Err(e2) = client.ack_event(&eid, None).await {
+                                    eprintln!("(ack fallback no-msg failed) eid={} : {}", eid, e2);
+                                }
+                            }
                         }
                     });
                 }
@@ -90,7 +104,8 @@ pub fn send_toast(
                     let msg = if ac.ask_message { prompt_message().ok().flatten() } else { None };
                     let client = ac.client.clone();
                     let eid = ac.eventid.clone();
-                    tokio::spawn(async move {
+                    let h = ac.handle.clone();
+                    h.spawn(async move {
                         if let Err(e) = client.unack_event(&eid, msg).await {
                             eprintln!("(unack failed) event {}: {}", eid, e);
                         }

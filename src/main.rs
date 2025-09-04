@@ -9,6 +9,7 @@ use zbx::ZbxClient;
 use ui::notify::{compute_timeout, send_toast};
 use ui::notify::AckControls;
 
+use tokio::runtime::Handle;
 mod config;
 mod domain;
 mod util;
@@ -112,6 +113,7 @@ async fn main() -> Result<()> {
             action_url.as_deref(),
             &cfg.notify_open_label,
             Some(AckControls{
+                handle: Handle::current(),
                 client: client.clone(),
                 eventid: p.eventid.clone(),
                 ask_message: true,                 // ouvre un prompt texte (facultatif)
