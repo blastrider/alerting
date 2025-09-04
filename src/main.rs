@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
     // --- Client Zabbix
     let client = ZbxClient::new(&cfg.url, &cfg.token)?;
     // --- Mode CLI de test : `alerting ack <eventid> [message]` ou `alerting unack <eventid> [message]`
-    let mut args = std::env::args().skip(1).collect::<Vec<_>>();
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
     if let Some(cmd) = args.get(0).map(|s| s.as_str()) {
         match cmd {
             "ack" => {
