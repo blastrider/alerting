@@ -1,15 +1,18 @@
-use anyhow::{Context, Result};
-use notify_rust::{Notification, Timeout, Urgency};
-use std::{path::Path, process::Command};
 use crate::zbx::ZbxClient;
 use anyhow::anyhow;
+use anyhow::{Context, Result};
+use notify_rust::{Notification, Timeout, Urgency};
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+};
 use tokio::runtime::Handle; // on garde pour compat (champ présent dans AckControls)
 
 /// Contrôles Ack/Unack à insérer dans la notification.
 #[derive(Clone)]
 pub struct AckControls {
     #[warn(dead_code)]
-    pub handle: Handle,        // plus utilisé, mais conservé pour compat
+    pub handle: Handle, // plus utilisé, mais conservé pour compat
     pub client: ZbxClient,
     pub eventid: String,
     /// Afficher un prompt pour message (optionnel) avant d'envoyer.
@@ -73,12 +76,16 @@ pub fn send_toast(
         match action {
             "open" => {
                 if let Some(ref url) = url_opt {
-                    let _ = Command::new("xdg-open").arg(url).spawn();
+                    open_url(url);
                 }
             }
             "ack" => {
                 if let Some(ac) = ac_opt.clone() {
-                    let msg = if ac.ask_message { prompt_message().ok().flatten() } else { None };
+                    let msg = if ac.ask_message {
+                        prompt_message().ok().flatten()
+                    } else {
+                        None
+                    };
                     let client = ac.client.clone();
                     let eid = ac.eventid.clone();
 
@@ -91,7 +98,10 @@ pub fn send_toast(
                         // Fallback : ACK sans message si le commentaire est refusé
                         if has_msg {
                             if let Err(e2) = client.ack_event_blocking(&eid, None) {
-                                eprintln!("(ack fallback no-msg failed blocking) eid={} : {:#}", eid, e2);
+                                eprintln!(
+                                    "(ack fallback no-msg failed blocking) eid={} : {:#}",
+                                    eid, e2
+                                );
                             }
                         }
                     } else {
@@ -101,7 +111,11 @@ pub fn send_toast(
             }
             "unack" => {
                 if let Some(ac) = ac_opt.clone() {
-                    let msg = if ac.ask_message { prompt_message().ok().flatten() } else { None };
+                    let msg = if ac.ask_message {
+                        prompt_message().ok().flatten()
+                    } else {
+                        None
+                    };
                     let client = ac.client.clone();
                     let eid = ac.eventid.clone();
 
@@ -119,6 +133,47 @@ pub fn send_toast(
     });
 
     Ok(())
+}
+
+fn open_url(url: &str) {
+    const SYSTEMD_RUN_BIN: &str = "systemd-run";
+    // Launch via systemd-run in a transient user service to avoid inheriting
+    // alerting.service hardening (which makes Firefox crash when spawned
+    // directly from this process).
+    let systemd_run_status = Command::new(SYSTEMD_RUN_BIN)
+        .arg("--user")
+        .arg("--collect")
+        .arg("--quiet")
+        .arg("--property=Description=Alerting open action")
+        .arg("xdg-open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    match systemd_run_status {
+        Ok(status) if status.success() => return,
+        Ok(status) => {
+            eprintln!(
+                "(ui) systemd-run failed with status {} for open_url, falling back",
+                status
+            );
+        }
+        Err(err) => {
+            eprintln!("(ui) systemd-run unavailable for open_url, falling back: {err:?}");
+        }
+    }
+
+    if let Err(err) = Command::new("xdg-open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        eprintln!("(ui) failed to open url with xdg-open: {err:?}");
+    }
 }
 
 /// Ouvre un prompt texte (`zenity --entry`) et retourne Some(message) si saisi.
