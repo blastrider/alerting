@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 
@@ -51,24 +50,24 @@ struct Zabbix {
     token: Option<String>,
     limit: Option<u32>,
     concurrency: Option<usize>,
-    ack_filter: Option<String>,       // "unack" | "ack" | "all"
-    open_url_fmt: Option<String>,     // ex: "https://...&filter_eventid={eventid}"
+    ack_filter: Option<String>,   // "unack" | "ack" | "all"
+    open_url_fmt: Option<String>, // ex: "https://...&filter_eventid={eventid}"
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct Notify {
-    appname: Option<String>,          // NOTIFY_APPNAME
-    sticky: Option<bool>,             // NOTIFY_STICKY
-    timeout_ms: Option<u32>,          // NOTIFY_TIMEOUT_MS
-    timeout_default: Option<bool>,    // NOTIFY_TIMEOUT_DEFAULT
-    icon: Option<String>,             // NOTIFY_ICON (chemin)
-    open_label: Option<String>,       // NOTIFY_OPEN_LABEL
-    notify_acked: Option<bool>,       // NOTIFY_ACKED
+    appname: Option<String>,       // NOTIFY_APPNAME
+    sticky: Option<bool>,          // NOTIFY_STICKY
+    timeout_ms: Option<u32>,       // NOTIFY_TIMEOUT_MS
+    timeout_default: Option<bool>, // NOTIFY_TIMEOUT_DEFAULT
+    icon: Option<String>,          // NOTIFY_ICON (chemin)
+    open_label: Option<String>,    // NOTIFY_OPEN_LABEL
+    notify_acked: Option<bool>,    // NOTIFY_ACKED
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct App {
-    max_notif: Option<usize>,         // MAX_NOTIF
+    max_notif: Option<usize>, // MAX_NOTIF
 }
 
 impl FileConfig {
@@ -78,8 +77,8 @@ impl FileConfig {
         }
         let txt = fs::read_to_string(path)
             .with_context(|| format!("Lecture fichier config: {}", path.display()))?;
-        let cfg: FileConfig = toml::from_str(&txt)
-            .with_context(|| format!("Parse TOML: {}", path.display()))?;
+        let cfg: FileConfig =
+            toml::from_str(&txt).with_context(|| format!("Parse TOML: {}", path.display()))?;
         Ok(Some(cfg))
     }
 }
@@ -100,8 +99,14 @@ impl Config {
         let a = file_cfg.app.unwrap_or_default();
 
         // 1) Zabbix
-        let url = pick_str("ZBX_URL", z.url, "https://zabbix.example.com/api_jsonrpc.php");
-        let token = env::var("ZBX_TOKEN").ok().or(z.token)
+        let url = pick_str(
+            "ZBX_URL",
+            z.url,
+            "https://zabbix.example.com/api_jsonrpc.php",
+        );
+        let token = env::var("ZBX_TOKEN")
+            .ok()
+            .or(z.token)
             .context("Token requis (ZBX_TOKEN ou config.toml [zabbix].token)")?;
         let limit = pick_parse_u32("LIMIT", z.limit, 20);
         let concurrency = pick_parse_usize("CONCURRENCY", z.concurrency, 8);
@@ -146,7 +151,10 @@ impl Config {
 // -----------------------------
 
 fn pick_str(env_key: &str, file_val: Option<String>, default_: &str) -> String {
-    env::var(env_key).ok().or(file_val).unwrap_or_else(|| default_.to_string())
+    env::var(env_key)
+        .ok()
+        .or(file_val)
+        .unwrap_or_else(|| default_.to_string())
 }
 fn pick_bool(env_key: &str, file_val: Option<bool>, default_: bool) -> bool {
     match env::var(env_key) {
@@ -155,10 +163,18 @@ fn pick_bool(env_key: &str, file_val: Option<bool>, default_: bool) -> bool {
     }
 }
 fn pick_parse_u32(env_key: &str, file_val: Option<u32>, default_: u32) -> u32 {
-    env::var(env_key).ok().and_then(|s| s.parse().ok()).or(file_val).unwrap_or(default_)
+    env::var(env_key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .or(file_val)
+        .unwrap_or(default_)
 }
 fn pick_parse_usize(env_key: &str, file_val: Option<usize>, default_: usize) -> usize {
-    env::var(env_key).ok().and_then(|s| s.parse().ok()).or(file_val).unwrap_or(default_)
+    env::var(env_key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .or(file_val)
+        .unwrap_or(default_)
 }
 fn pick_opt_parse_u32(env_key: &str, file_val: Option<u32>) -> Option<u32> {
     match env::var(env_key) {
@@ -167,13 +183,19 @@ fn pick_opt_parse_u32(env_key: &str, file_val: Option<u32>) -> Option<u32> {
     }
 }
 fn pick_opt_path(env_key: &str, file_val: Option<String>) -> Option<PathBuf> {
-    env::var(env_key).ok().map(PathBuf::from).or_else(|| file_val.map(PathBuf::from))
+    env::var(env_key)
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| file_val.map(PathBuf::from))
 }
 fn pick_ack_filter(file_val: Option<String>) -> AckFilter {
-    let src = env::var("ACK_FILTER").ok().or(file_val).unwrap_or_else(|| "unack".into());
+    let src = env::var("ACK_FILTER")
+        .ok()
+        .or(file_val)
+        .unwrap_or_else(|| "unack".into());
     match src.to_ascii_lowercase().as_str() {
         "ack" => AckFilter::Ack,
         "all" => AckFilter::All,
-        _     => AckFilter::Unack,
+        _ => AckFilter::Unack,
     }
 }
