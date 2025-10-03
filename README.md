@@ -12,7 +12,7 @@ Chaque toast peut **ouvrir Zabbix**, **acknowledge** ou **unacknowledge** le pro
 * **Notifications** avec niveau d’urgence selon la sévérité Zabbix
 * **Boutons intégrés** :
 
-  * **Ouvrir** dans Zabbix (URL paramétrable)
+  * **Ouvrir** dans Zabbix (URL paramétrable), ne fonctionne pas quand Firefox est navigateur web par défaut, mais ok Brave
   * **Ack** / **Unack** (appelle `event.acknowledge`)
   * **Message** facultatif saisi via `zenity --entry`
 * Concurrency contrôlée pour les appels API
