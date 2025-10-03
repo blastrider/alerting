@@ -18,7 +18,7 @@ Chaque toast peut **ouvrir Zabbix**, **acknowledge** ou **unacknowledge** le pro
 
 > ℹ️ Sous Windows 11, les toasts sont purement informatifs pour l’instant (pas de boutons interactifs).
 * Concurrency contrôlée pour les appels API
-* **Configuration** parr fichier TOML + variables d’environnement (ENV > fichier > défauts)
+* **Configuration** par fichier TOML + variables d’environnement (ENV > fichier > défauts)
 
 ---
 
