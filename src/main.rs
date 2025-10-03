@@ -1,14 +1,13 @@
 use anyhow::Result;
 use chrono::{Local, TimeZone};
-use notify_rust::Urgency;
-
 use config::Config;
 use domain::severity::Severity;
 use ui::notify::AckControls;
-use ui::notify::{compute_timeout, send_toast};
+use ui::notify::{ToastUrgency, compute_timeout, send_toast};
 use util::time::fmt_epoch_local;
 use zbx::ZbxClient;
 
+#[cfg(target_os = "linux")]
 use tokio::runtime::Handle;
 mod config;
 mod domain;
@@ -22,12 +21,12 @@ fn make_open_url(fmt: Option<&str>, eventid: &str) -> Option<String> {
     fmt.map(|f| f.replace("{eventid}", eventid))
 }
 
-fn urgency_for_severity(sev: Severity) -> Urgency {
+fn urgency_for_severity(sev: Severity) -> ToastUrgency {
     match sev {
-        Severity::Disaster | Severity::High => Urgency::Critical,
-        Severity::Average | Severity::Warning => Urgency::Normal,
-        Severity::Information | Severity::NotClassified => Urgency::Low,
-        Severity::Unknown(_) => Urgency::Normal,
+        Severity::Disaster | Severity::High => ToastUrgency::Critical,
+        Severity::Average | Severity::Warning => ToastUrgency::Normal,
+        Severity::Information | Severity::NotClassified => ToastUrgency::Low,
+        Severity::Unknown(_) => ToastUrgency::Normal,
     }
 }
 
@@ -135,6 +134,20 @@ async fn main() -> Result<()> {
         let urgency = urgency_for_severity(sev);
         let action_url = make_open_url(cfg.zbx_open_url_fmt.as_deref(), &p.eventid);
 
+        #[cfg(target_os = "linux")]
+        let ack_controls = Some(AckControls {
+            handle: Handle::current(),
+            client: client.clone(),
+            eventid: p.eventid.clone(),
+            ask_message: true,           // ouvre un prompt texte (facultatif)
+            allow_unack: p.acknowledged, // si déjà ACK, proposer "Unack"
+            ack_label: None,
+            unack_label: None,
+        });
+
+        #[cfg(not(target_os = "linux"))]
+        let ack_controls = None::<AckControls>;
+
         let _ = send_toast(
             &summary,
             &body,
@@ -145,15 +158,7 @@ async fn main() -> Result<()> {
             None,
             action_url.as_deref(),
             &cfg.notify_open_label,
-            Some(AckControls {
-                handle: Handle::current(),
-                client: client.clone(),
-                eventid: p.eventid.clone(),
-                ask_message: true,           // ouvre un prompt texte (facultatif)
-                allow_unack: p.acknowledged, // si déjà ACK, proposer "Unack"
-                ack_label: None,
-                unack_label: None,
-            }),
+            ack_controls,
         );
     }
 
