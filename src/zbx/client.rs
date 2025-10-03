@@ -1,11 +1,11 @@
-use anyhow::{anyhow, bail, Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
-use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
-use std::sync::Arc;
-use tokio::{sync::Semaphore, task::JoinSet};
-use std::time::Duration;
+use anyhow::{Context, Result, anyhow, bail};
 use reqwest::blocking as reqb;
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::{sync::Semaphore, task::JoinSet};
 
 use super::types::{EventWithHosts, HostMeta, Problem, RpcRequest, ZbxEnvelope};
 
@@ -26,8 +26,11 @@ pub enum AckFilter {
 impl ZbxClient {
     pub fn new(url: &str, token: &str) -> Result<Self> {
         let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json-rpc"));
-             let http = reqwest::Client::builder()
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/json-rpc"),
+        );
+        let http = reqwest::Client::builder()
             .default_headers(headers)
             .http1_only() // ← force HTTP/1.1
             .user_agent(concat!("alerting/", env!("CARGO_PKG_VERSION")))
@@ -35,16 +38,33 @@ impl ZbxClient {
             .timeout(Duration::from_secs(15))
             .build()
             .context("building HTTP client")?;
-        Ok(Self { http, url: url.to_string(), token: token.to_string() })
+        Ok(Self {
+            http,
+            url: url.to_string(),
+            token: token.to_string(),
+        })
     }
 
     async fn call<T: DeserializeOwned>(&self, method: &str, params: Value, id: u32) -> Result<T> {
-        let payload = RpcRequest { jsonrpc: "2.0", method, params, id, auth: &self.token };
-        let resp = self.http.post(&self.url).json(&payload).send().await
-           .map_err(|e| anyhow!("HTTP POST send to {} failed: {:#}", self.url, e))?;
+        let payload = RpcRequest {
+            jsonrpc: "2.0",
+            method,
+            params,
+            id,
+            auth: &self.token,
+        };
+        let resp = self
+            .http
+            .post(&self.url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| anyhow!("HTTP POST send to {} failed: {:#}", self.url, e))?;
 
         let status = resp.status();
-       let env: ZbxEnvelope<T> = resp.json().await
+        let env: ZbxEnvelope<T> = resp
+            .json()
+            .await
             .with_context(|| format!("Decoding JSON response (HTTP {status})"))?;
 
         if let Some(err) = env.error {
@@ -55,7 +75,8 @@ impl ZbxClient {
                 err.data.map(|d| format!(" – {d}")).unwrap_or_default()
             );
         }
-        env.result.ok_or_else(|| anyhow::anyhow!("Zabbix API: missing result field"))
+        env.result
+            .ok_or_else(|| anyhow::anyhow!("Zabbix API: missing result field"))
     }
 
     /// Résout les hôtes pour une liste d'eventids, avec limite de parallélisme.
@@ -107,19 +128,32 @@ impl ZbxClient {
             "sortorder": "DESC"
         });
         match ack {
-            AckFilter::Unack => { params["acknowledged"] = json!(false); }
-            AckFilter::Ack   => { params["acknowledged"] = json!(true);  }
-            AckFilter::All   => { /* ne rien ajouter */ }
+            AckFilter::Unack => {
+                params["acknowledged"] = json!(false);
+            }
+            AckFilter::Ack => {
+                params["acknowledged"] = json!(true);
+            }
+            AckFilter::All => { /* ne rien ajouter */ }
         }
         self.call("problem.get", params, 1).await
     }
 
-
     /// Appel générique event.acknowledge (bitmask d'actions).
-    async fn event_update(&self, eventids: &[&str], action: i32, message: Option<&str>) -> Result<Value> {
+    async fn event_update(
+        &self,
+        eventids: &[&str],
+        action: i32,
+        message: Option<&str>,
+    ) -> Result<Value> {
         // Convertit chaque eventid en entier si possible (sinon string)
-        let ids_json: Vec<Value> = eventids.iter()
-            .map(|e| e.parse::<i64>().map(Value::from).unwrap_or_else(|_| Value::from(*e)))
+        let ids_json: Vec<Value> = eventids
+            .iter()
+            .map(|e| {
+                e.parse::<i64>()
+                    .map(Value::from)
+                    .unwrap_or_else(|_| Value::from(*e))
+            })
             .collect();
         let mut params = json!({ "eventids": ids_json, "action": action });
         if let Some(msg) = message {
@@ -131,14 +165,16 @@ impl ZbxClient {
         }
         let res = self.call::<Value>("event.acknowledge", params, 777).await?;
         eprintln!("[zbx] event.acknowledge OK: {}", res);
-       Ok(res)
+        Ok(res)
     }
 
     /// Ack simple ou avec message (bitmask: 2 [+4 si message]).
     pub async fn ack_event(&self, eventid: &str, message: Option<String>) -> Result<()> {
         let has_msg = message.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
         let action = if has_msg { 2 + 4 } else { 2 };
-        let _ = self.event_update(&[eventid], action, message.as_deref()).await?;
+        let _ = self
+            .event_update(&[eventid], action, message.as_deref())
+            .await?;
         eprintln!("[zbx] ACK sent eid={} msg={}", eventid, has_msg);
         Ok(())
     }
@@ -147,34 +183,48 @@ impl ZbxClient {
     pub async fn unack_event(&self, eventid: &str, message: Option<String>) -> Result<()> {
         let has_msg = message.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
         let action = if has_msg { 16 + 4 } else { 16 };
-        let _ = self.event_update(&[eventid], action, message.as_deref()).await?;
+        let _ = self
+            .event_update(&[eventid], action, message.as_deref())
+            .await?;
         eprintln!("[zbx] UNACK sent eid={} msg={}", eventid, has_msg);
         Ok(())
     }
 
     pub async fn host_meta_for_event(&self, eventid: &str) -> Result<Option<HostMeta>> {
-    let params = json!({
-        "output": ["eventid","clock"],
-        "selectHosts": ["host","name","status"], // on récupère aussi le status
-        "eventids": eventid
-    });
-
-    let result: Vec<EventWithHosts> = self.call("event.get", params, 2).await?;
-    let meta = result
-        .first()
-        .and_then(|e| e.hosts.first())
-        .map(|h| HostMeta {
-            display_name: h.name.clone().or(h.host.clone()).unwrap_or_else(|| "-".into()),
-            status: h.status, // Some(0|1) ou None
+        let params = json!({
+            "output": ["eventid","clock"],
+            "selectHosts": ["host","name","status"], // on récupère aussi le status
+            "eventids": eventid
         });
 
-    Ok(meta)
-}
+        let result: Vec<EventWithHosts> = self.call("event.get", params, 2).await?;
+        let meta = result
+            .first()
+            .and_then(|e| e.hosts.first())
+            .map(|h| HostMeta {
+                display_name: h
+                    .name
+                    .clone()
+                    .or(h.host.clone())
+                    .unwrap_or_else(|| "-".into()),
+                status: h.status, // Some(0|1) ou None
+            });
 
-fn call_blocking<T: DeserializeOwned>(&self, method: &str, params: Value, id: u32) -> Result<T> {
+        Ok(meta)
+    }
+
+    fn call_blocking<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+        id: u32,
+    ) -> Result<T> {
         // headers "application/json-rpc"
         let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json-rpc"));
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/json-rpc"),
+        );
 
         // client HTTP/1.1 avec timeouts
         let http = reqb::Client::builder()
@@ -185,7 +235,13 @@ fn call_blocking<T: DeserializeOwned>(&self, method: &str, params: Value, id: u3
             .build()
             .context("building blocking HTTP client")?;
 
-        let payload = RpcRequest { jsonrpc: "2.0", method, params, id, auth: &self.token };
+        let payload = RpcRequest {
+            jsonrpc: "2.0",
+            method,
+            params,
+            id,
+            auth: &self.token,
+        };
 
         let resp = http
             .post(&self.url)
@@ -206,14 +262,24 @@ fn call_blocking<T: DeserializeOwned>(&self, method: &str, params: Value, id: u3
                 err.data.map(|d| format!(" – {d}")).unwrap_or_default()
             );
         }
-        env.result.ok_or_else(|| anyhow::anyhow!("Zabbix API: missing result field [blocking]"))
+        env.result
+            .ok_or_else(|| anyhow::anyhow!("Zabbix API: missing result field [blocking]"))
     }
 
-    fn event_update_blocking(&self, eventids: &[&str], action: i32, message: Option<&str>) -> Result<Value> {
+    fn event_update_blocking(
+        &self,
+        eventids: &[&str],
+        action: i32,
+        message: Option<&str>,
+    ) -> Result<Value> {
         // eventids en entiers si possible (sinon strings)
         let ids_json: Vec<Value> = eventids
             .iter()
-            .map(|e| e.parse::<i64>().map(Value::from).unwrap_or_else(|_| Value::from(*e)))
+            .map(|e| {
+                e.parse::<i64>()
+                    .map(Value::from)
+                    .unwrap_or_else(|_| Value::from(*e))
+            })
             .collect();
 
         let mut params = json!({ "eventids": ids_json, "action": action });
@@ -242,5 +308,4 @@ fn call_blocking<T: DeserializeOwned>(&self, method: &str, params: Value, id: u3
         eprintln!("[zbx/blocking] UNACK sent eid={} msg={}", eventid, has_msg);
         Ok(())
     }
-
 }

@@ -16,7 +16,7 @@ pub struct ZbxError {
 pub struct ZbxEnvelope<T> {
     #[allow(dead_code)]
     pub jsonrpc: String,
-    pub result: Option<T>,     // ne pas mettre #[serde(default)] ici
+    pub result: Option<T>, // ne pas mettre #[serde(default)] ici
     pub error: Option<ZbxError>,
     #[allow(dead_code)]
     pub id: Value,
@@ -34,7 +34,7 @@ pub struct Problem {
     #[serde(rename = "objectid")]
     #[allow(dead_code)]
     pub _objectid: Option<String>, // non utilisé dans l'affichage
-        #[serde(default, deserialize_with = "de_bool_from_str_or_int")]
+    #[serde(default, deserialize_with = "de_bool_from_str_or_int")]
     pub acknowledged: bool, // "0"/"1" ou 0/1 -> bool
 }
 

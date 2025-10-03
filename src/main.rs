@@ -4,17 +4,17 @@ use notify_rust::Urgency;
 
 use config::Config;
 use domain::severity::Severity;
+use ui::notify::AckControls;
+use ui::notify::{compute_timeout, send_toast};
 use util::time::fmt_epoch_local;
 use zbx::ZbxClient;
-use ui::notify::{compute_timeout, send_toast};
-use ui::notify::AckControls;
 
 use tokio::runtime::Handle;
 mod config;
 mod domain;
+mod ui;
 mod util;
 mod zbx;
-mod ui;
 
 /// Construit l’URL "ouvrir" à partir d’un format ENV/Fichier, ex:
 ///   zbx_open_url_fmt="https://...&filter_eventid={eventid}"
@@ -43,14 +43,18 @@ async fn main() -> Result<()> {
     if let Some(cmd) = args.get(0).map(|s| s.as_str()) {
         match cmd {
             "ack" => {
-                let eid = args.get(1).expect("usage: alerting ack <eventid> [message]");
+                let eid = args
+                    .get(1)
+                    .expect("usage: alerting ack <eventid> [message]");
                 let msg = args.get(2).cloned();
                 client.ack_event(eid, msg).await?;
                 println!("ACK OK for {}", eid);
                 return Ok(());
             }
             "unack" => {
-                let eid = args.get(1).expect("usage: alerting unack <eventid> [message]");
+                let eid = args
+                    .get(1)
+                    .expect("usage: alerting unack <eventid> [message]");
                 let msg = args.get(2).cloned();
                 client.unack_event(eid, msg).await?;
                 println!("UNACK OK for {}", eid);
@@ -61,14 +65,20 @@ async fn main() -> Result<()> {
     }
 
     // --- Timeout notifications
-    let timeout = compute_timeout(cfg.notify_sticky, cfg.notify_timeout_ms, cfg.notify_timeout_default);
+    let timeout = compute_timeout(
+        cfg.notify_sticky,
+        cfg.notify_timeout_ms,
+        cfg.notify_timeout_default,
+    );
 
     // 1) Récupérer les problèmes actifs selon ACK_FILTER
     let problems = client.active_problems(cfg.limit, cfg.ack_filter).await?;
 
     // 2) Résoudre les hôtes (parallélisé) pour TOUS les problèmes récupérés
     let eventids: Vec<String> = problems.iter().map(|p| p.eventid.clone()).collect();
-    let hosts = client.resolve_hosts_concurrent(&eventids, cfg.concurrency).await?;
+    let hosts = client
+        .resolve_hosts_concurrent(&eventids, cfg.concurrency)
+        .await?;
 
     // 3) Zipper + filtrer hôtes désactivés
     let mut rows: Vec<_> = problems
@@ -77,8 +87,8 @@ async fn main() -> Result<()> {
         .filter_map(|(p, hm)| {
             let hm = hm?;
             match hm.status {
-                Some(1) => None,        // désactivé -> on ignore
-                _ => Some((p, hm)),      // activé ou inconnu -> on garde
+                Some(1) => None,    // désactivé -> on ignore
+                _ => Some((p, hm)), // activé ou inconnu -> on garde
             }
         })
         .collect();
@@ -98,7 +108,9 @@ async fn main() -> Result<()> {
     for (p, hm) in rows {
         let host = hm.display_name.as_str();
         let sev = Severity::from(p.severity);
-        let when = Local.timestamp_opt(p.clock, 0).single()
+        let when = Local
+            .timestamp_opt(p.clock, 0)
+            .single()
             .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_else(|| format!("(horodatage invalide: {})", p.clock));
         let when_local = fmt_epoch_local(p.clock);
@@ -133,12 +145,12 @@ async fn main() -> Result<()> {
             None,
             action_url.as_deref(),
             &cfg.notify_open_label,
-            Some(AckControls{
+            Some(AckControls {
                 handle: Handle::current(),
                 client: client.clone(),
                 eventid: p.eventid.clone(),
-                ask_message: true,                 // ouvre un prompt texte (facultatif)
-                allow_unack: p.acknowledged,       // si déjà ACK, proposer "Unack"
+                ask_message: true,           // ouvre un prompt texte (facultatif)
+                allow_unack: p.acknowledged, // si déjà ACK, proposer "Unack"
                 ack_label: None,
                 unack_label: None,
             }),
