@@ -3,7 +3,7 @@ use anyhow::{Context, Result, anyhow};
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{OnceLock, mpsc};
 use std::time::Duration;
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::Foundation::{EventRegistrationToken, IPropertyValue, TypedEventHandler};
@@ -17,11 +17,9 @@ use windows::Win32::System::Com::{
     CoUninitialize, IPersistFile,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
-use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+use windows::Win32::UI::Shell::{IShellLinkW, SetCurrentProcessExplicitAppUserModelID, ShellLink};
 use windows::core::{GUID, HSTRING, IInspectable, Interface, PCWSTR, PROPVARIANT};
-use winrt_notification::{
-    Duration as WinDuration, IconCrop, LoopableSound, Scenario, Sound, Toast,
-};
+use winrt_notification::{Duration as WinDuration, LoopableSound, Scenario, Sound, Toast};
 
 use super::{ToastTimeout, ToastUrgency};
 
@@ -45,14 +43,36 @@ pub fn send_toast(
     _action_open_label: &str,
     ack_controls: Option<AckControls>,
 ) -> Result<()> {
-    let toast_app_id = if appname.trim().is_empty() {
+    debug_log(format!(
+        "send_toast summary='{}' body_len={} urgency={:?} ack_controls={} appname='{}'",
+        summary,
+        body.len(),
+        urgency,
+        ack_controls.is_some(),
+        appname
+    ));
+    let preferred_app_id = if appname.trim().is_empty() {
         Toast::POWERSHELL_APP_ID
     } else {
         appname
     };
 
-    if let Err(err) = ensure_app_registration(toast_app_id) {
-        eprintln!("(ui) impossible d’enregistrer l’AppUserModelID '{toast_app_id}': {err:#}");
+    let toast_app_id = match ensure_app_registration(preferred_app_id) {
+        Ok(_) => preferred_app_id,
+        Err(err) => {
+            eprintln!(
+                "(ui) impossible d’enregistrer l’AppUserModelID '{preferred_app_id}': {err:#}. "
+            );
+            eprintln!("(ui) utilisation du fallback Toast::POWERSHELL_APP_ID");
+            Toast::POWERSHELL_APP_ID
+        }
+    };
+
+    debug_log(format!("set_current_process_app_id -> {}", toast_app_id));
+    if let Err(err) = set_current_process_app_id(toast_app_id) {
+        eprintln!(
+            "(ui) impossible de définir AppUserModelID pour ce processus ({toast_app_id}): {err:#}",
+        );
     }
 
     if let Some(ack_controls) = ack_controls {
@@ -79,54 +99,9 @@ pub fn send_toast(
     let (duration, scenario) = map_timeout(timeout);
     let sound = map_sound(urgency, matches!(timeout, ToastTimeout::Never));
 
-    let mut toast = Toast::new(toast_app_id)
-        .title(summary)
-        .duration(duration)
-        .sound(sound);
-
-    if let Some(scenario) = scenario {
-        toast = toast.scenario(scenario);
-    }
-
-    let body_lines: Vec<&str> = body
-        .lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .collect();
-
-    if let Some(line) = body_lines.get(0) {
-        toast = toast.text1(line);
-    } else if !summary.is_empty() {
-        toast = toast.text1(summary);
-    }
-
-    if let Some(line) = body_lines.get(1) {
-        let mut text = (*line).to_string();
-        if body_lines.len() > 2 {
-            let tail = body_lines[2..].join(" – ");
-            if !tail.is_empty() {
-                if !text.is_empty() {
-                    text.push_str(" – ");
-                }
-                text.push_str(&tail);
-            }
-        }
-        toast = toast.text2(&text);
-    } else if body_lines.len() <= 1 && !body_lines.is_empty() {
-        // single line body already used as text1; keep text2 empty
-    } else if !summary.is_empty() {
-        toast = toast.text2(summary);
-    }
-
-    if let Some(icon_path) = icon {
-        toast = toast.icon(icon_path, IconCrop::Square, summary);
-    }
-
-    toast
-        .show()
-        .map_err(|err| anyhow!("échec toast WinRT: {err}"))?;
-
-    Ok(())
+    let toast_definition = build_simple_toast_xml(summary, body, icon, duration, scenario, sound);
+    debug_log(format!("toast XML simple: {toast_definition}"));
+    show_simple_toast(toast_app_id, &toast_definition)
 }
 
 fn send_interactive_ack_toast(
@@ -166,6 +141,7 @@ fn send_interactive_ack_toast(
         scenario,
         sound,
     );
+    debug_log(format!("toast XML interactif: {toast_definition}"));
 
     let _apartment = ComApartment::new()?;
 
@@ -244,6 +220,10 @@ fn send_interactive_ack_toast(
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string());
             let has_msg = trimmed.is_some();
+            debug_log(format!(
+                "ACK received event={} has_msg={} message={:?}",
+                eventid, has_msg, trimmed
+            ));
 
             if let Err(err) = client.ack_event_blocking(&eventid, trimmed.clone()) {
                 eprintln!("(ui) ack Windows échoué eid={eventid}: {err:#}");
@@ -260,22 +240,43 @@ fn send_interactive_ack_toast(
             }
         }
         Ok(ToastSignal::Activated(arguments)) => {
+            debug_log(format!("activation inattendue: {arguments}"));
             eprintln!("(ui) activation inattendue: {arguments}");
         }
         Ok(ToastSignal::Dismissed(reason)) => {
+            debug_log(format!("toast dismissed reason={reason:?} event={eventid}"));
             eprintln!("(ui) toast fermé (reason={reason:?}) eid={eventid}");
         }
         Ok(ToastSignal::Failed(message)) => {
+            debug_log(format!(
+                "toast failed event={} message={}",
+                eventid, message
+            ));
             return Err(anyhow!("Toast Windows échec: {message}"));
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
+            debug_log(format!("toast timeout event={eventid}"));
             eprintln!("(ui) toast expiré sans interaction eid={eventid}");
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
+            debug_log(format!("toast channel disconnected event={eventid}"));
             eprintln!("(ui) canal de toast déconnecté eid={eventid}");
         }
     }
 
+    Ok(())
+}
+
+fn show_simple_toast(app_id: &str, toast_definition: &str) -> Result<()> {
+    let _apartment = ComApartment::new()?;
+
+    let document = XmlDocument::new()?;
+    document.LoadXml(&HSTRING::from(toast_definition))?;
+
+    let toast = ToastNotification::CreateToastNotification(&document)?;
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app_id))?;
+    debug_log(format!("show_simple_toast app_id={app_id}"));
+    notifier.Show(&toast)?;
     Ok(())
 }
 
@@ -393,88 +394,124 @@ fn build_ack_toast_xml(
     scenario: Option<Scenario>,
     sound: Option<Sound>,
 ) -> String {
-    let mut text_nodes: Vec<String> = Vec::new();
+    let visual = build_visual(summary, body, icon);
+    let actions = build_ack_actions(ack_label, include_input, placeholder);
+    build_toast_xml(visual, Some(actions), duration, scenario, sound)
+}
 
-    if !summary.trim().is_empty() {
-        text_nodes.push(escape_text(summary.trim()));
-    }
+fn build_simple_toast_xml(
+    summary: &str,
+    body: &str,
+    icon: Option<&Path>,
+    duration: WinDuration,
+    scenario: Option<Scenario>,
+    sound: Option<Sound>,
+) -> String {
+    let visual = build_visual(summary, body, icon);
+    build_toast_xml(visual, None, duration, scenario, sound)
+}
 
-    for line in body.lines() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            text_nodes.push(escape_text(trimmed));
-        }
-    }
+fn build_visual(summary: &str, body: &str, icon: Option<&Path>) -> String {
+    let summary_trimmed = summary.trim();
+    let title = if summary_trimmed.is_empty() {
+        "Nouvelle alerte Zabbix".to_string()
+    } else {
+        escape_text(summary_trimmed)
+    };
 
-    if text_nodes.is_empty() {
-        text_nodes.push(String::from("Notification"));
-    }
+    let body_lines: Vec<String> = body
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(escape_text)
+        .collect();
 
-    let mut binding_children = String::new();
+    let mut visual = String::from("  <visual>\n    <binding template=\"ToastGeneric\">\n");
 
     if let Some(icon_path) = icon {
         let icon_uri = escape_attr(&file_uri(icon_path));
-        let alt = escape_attr(summary);
-        binding_children.push_str(&format!(
-            "<image placement=\"appLogoOverride\" src=\"{}\" alt=\"{}\" />",
+        let alt = if summary_trimmed.is_empty() {
+            "Notification".to_string()
+        } else {
+            escape_attr(summary_trimmed)
+        };
+        visual.push_str(&format!(
+            "      <image placement=\"appLogoOverride\" src=\"{}\" alt=\"{}\" />\n",
             icon_uri, alt
         ));
     }
 
-    for text in &text_nodes {
-        binding_children.push_str(&format!("<text>{text}</text>"));
+    visual.push_str(&format!("      <text>{}</text>\n", title));
+
+    match body_lines.split_first() {
+        Some((first, rest)) => {
+            visual.push_str("      <text>");
+            visual.push_str(first);
+            visual.push_str("</text>\n");
+
+            if !rest.is_empty() {
+                let tail = rest.join(" – ");
+                visual.push_str("      <text>");
+                visual.push_str(&tail);
+                visual.push_str("</text>\n");
+            }
+        }
+        None => {
+            visual.push_str("      <text>Aucune information supplémentaire</text>\n");
+        }
     }
 
-    let mut visual = String::from("<visual><binding template=\"ToastGeneric\">");
-    visual.push_str(&binding_children);
-    visual.push_str("</binding></visual>");
+    visual.push_str("    </binding>\n  </visual>\n");
+    visual
+}
 
-    let duration_attr = match duration {
-        WinDuration::Short => "duration=\"short\"",
-        WinDuration::Long => "duration=\"long\"",
-    };
-
-    let scenario_attr = scenario.and_then(scenario_to_attr);
-
-    let audio_fragment = sound_fragment(sound);
-
-    let mut actions = String::new();
-    actions.push_str("<actions>");
+fn build_ack_actions(ack_label: &str, include_input: bool, placeholder: Option<&str>) -> String {
+    let mut actions = String::from("  <actions>\n");
     if include_input {
-        let placeholder = escape_attr(placeholder.unwrap_or(""));
+        let placeholder = escape_attr(placeholder.unwrap_or("Commentaire (optionnel)"));
         actions.push_str(&format!(
-            "<input id=\"ackMessage\" type=\"text\" placeHolderContent=\"{}\" />",
+            "    <input id=\"ackMessage\" type=\"text\" placeHolderContent=\"{}\" />\n",
             placeholder
         ));
-    }
-    let ack_label = escape_attr(ack_label);
-    if include_input {
         actions.push_str(&format!(
-            "<action content=\"{}\" arguments=\"ack\" activationType=\"foreground\" hint-inputId=\"ackMessage\" />",
-            ack_label
+            "    <action content=\"{}\" arguments=\"ack\" activationType=\"foreground\" hint-inputId=\"ackMessage\" />\n",
+            escape_attr(ack_label)
         ));
     } else {
         actions.push_str(&format!(
-            "<action content=\"{}\" arguments=\"ack\" activationType=\"foreground\" />",
-            ack_label
+            "    <action content=\"{}\" arguments=\"ack\" activationType=\"foreground\" />\n",
+            escape_attr(ack_label)
         ));
     }
-    actions.push_str("</actions>");
+    actions.push_str("  </actions>\n");
+    actions
+}
 
-    let mut toast = String::from("<toast ");
-    toast.push_str(duration_attr);
-    if let Some(attr) = scenario_attr {
+fn build_toast_xml(
+    visual: String,
+    actions: Option<String>,
+    duration: WinDuration,
+    scenario: Option<Scenario>,
+    sound: Option<Sound>,
+) -> String {
+    let mut toast = String::from("<toast activationType=\"foreground\"");
+    toast.push_str(match duration {
+        WinDuration::Short => " duration=\"short\"",
+        WinDuration::Long => " duration=\"long\"",
+    });
+    if let Some(attr) = scenario.and_then(scenario_to_attr) {
         toast.push(' ');
         toast.push_str(&attr);
     }
-    toast.push('>');
+    toast.push_str(">\n");
     toast.push_str(&visual);
-    toast.push_str(&actions);
-    if !audio_fragment.is_empty() {
-        toast.push_str(&audio_fragment);
+    if let Some(actions) = actions {
+        toast.push_str(&actions);
+    }
+    if let Some(audio) = sound_fragment(sound) {
+        toast.push_str(&audio);
     }
     toast.push_str("</toast>");
-
     toast
 }
 
@@ -487,19 +524,22 @@ fn scenario_to_attr(scenario: Scenario) -> Option<String> {
     }
 }
 
-fn sound_fragment(sound: Option<Sound>) -> String {
+fn sound_fragment(sound: Option<Sound>) -> Option<String> {
     match sound {
-        None => "<audio silent=\"true\" />".to_string(),
-        Some(Sound::Default) => String::new(),
-        Some(Sound::Loop(loopable)) => format!(
-            "<audio loop=\"true\" src=\"ms-winsoundevent:Notification.Looping.{}\" />",
+        None => Some("  <audio silent=\"true\" />\n".to_string()),
+        Some(Sound::Default) => None,
+        Some(Sound::Loop(loopable)) => Some(format!(
+            "  <audio loop=\"true\" src=\"ms-winsoundevent:Notification.Looping.{}\" />\n",
             loopable
-        ),
-        Some(Sound::Single(loopable)) => format!(
-            "<audio src=\"ms-winsoundevent:Notification.Looping.{}\" />",
+        )),
+        Some(Sound::Single(loopable)) => Some(format!(
+            "  <audio src=\"ms-winsoundevent:Notification.Looping.{}\" />\n",
             loopable
-        ),
-        Some(other) => format!("<audio src=\"ms-winsoundevent:Notification.{}\" />", other),
+        )),
+        Some(other) => Some(format!(
+            "  <audio src=\"ms-winsoundevent:Notification.{}\" />\n",
+            other
+        )),
     }
 }
 
@@ -568,3 +608,23 @@ const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
     fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
     pid: 5,
 };
+
+fn set_current_process_app_id(app_id: &str) -> windows::core::Result<()> {
+    let hstr = HSTRING::from(app_id);
+    unsafe { SetCurrentProcessExplicitAppUserModelID(PCWSTR(hstr.as_ptr())) }
+}
+
+fn debug_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("ALERTING_WINDOWS_DEBUG")
+            .map(|v| !v.is_empty() && v != "0" && v.to_ascii_lowercase() != "false")
+            .unwrap_or(false)
+    })
+}
+
+fn debug_log(message: impl AsRef<str>) {
+    if debug_enabled() {
+        eprintln!("[windows-debug] {}", message.as_ref());
+    }
+}
