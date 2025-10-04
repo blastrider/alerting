@@ -65,7 +65,7 @@ ack_filter = "unack"                 # "unack" | "ack" | "all"
 open_url_fmt = "https://zabbix.example.com/zabbix.php?action=problem.view&filter_eventid={eventid}"
 
 [notify]
-appname = "Innlog Agent"
+appname = "Alerting-Agent"
 sticky = false
 timeout_ms = 8000
 timeout_default = false
@@ -86,7 +86,7 @@ max_notif = 5
 | `CONCURRENCY`            | Appels parallèles pour la résolution d’hôtes         | `8`                                  |
 | `ACK_FILTER`             | Filtre de récupération : `unack` / `ack` / `all`     | `unack`                              |
 | `MAX_NOTIF`              | Nombre max de toasts affichés                        | `5`                                  |
-| `NOTIFY_APPNAME`         | Nom d’application des toasts                         | `Innlog Agent`                       |
+| `NOTIFY_APPNAME`         | Nom d’application des toasts                         | `Alerting-Agent`                     |
 | `NOTIFY_STICKY`          | `true` = toasts persistants                          | `false`                              |
 | `NOTIFY_TIMEOUT_MS`      | Timeout custom des toasts (ms)                       | `8000`                               |
 | `NOTIFY_TIMEOUT_DEFAULT` | Utiliser le timeout par défaut du système            | `false`                              |

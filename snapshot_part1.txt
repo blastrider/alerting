@@ -154,7 +154,7 @@ impl Config {
         let max_notif = pick_parse_usize("MAX_NOTIF", a.max_notif, 5);
 
         // 3) Notifications
-        let notify_appname = pick_str("NOTIFY_APPNAME", n.appname, "Innlog Agent");
+        let notify_appname = pick_str("NOTIFY_APPNAME", n.appname, "Alerting-Agent");
         let notify_sticky = pick_bool("NOTIFY_STICKY", n.sticky, false);
         let notify_timeout_ms = pick_opt_parse_u32("NOTIFY_TIMEOUT_MS", n.timeout_ms);
         let notify_timeout_default = pick_bool("NOTIFY_TIMEOUT_DEFAULT", n.timeout_default, false);
