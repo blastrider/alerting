@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use reqwest::blocking as reqb;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::de::DeserializeOwned;
@@ -30,14 +30,16 @@ impl ZbxClient {
             CONTENT_TYPE,
             HeaderValue::from_static("application/json-rpc"),
         );
-        let http = reqwest::Client::builder()
+        #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+        let mut builder = reqwest::Client::builder()
             .default_headers(headers)
             .http1_only() // ← force HTTP/1.1
             .user_agent(concat!("alerting/", env!("CARGO_PKG_VERSION")))
             .pool_idle_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(15))
-            .build()
-            .context("building HTTP client")?;
+            .danger_accept_invalid_certs(true);
+
+        let http = builder.build().context("building HTTP client")?;
         Ok(Self {
             http,
             url: url.to_string(),
@@ -59,7 +61,7 @@ impl ZbxClient {
             .json(&payload)
             .send()
             .await
-            .map_err(|e| anyhow!("HTTP POST send to {} failed: {:#}", self.url, e))?;
+            .with_context(|| format!("HTTP POST send to {} failed", self.url))?;
 
         let status = resp.status();
         let env: ZbxEnvelope<T> = resp
@@ -227,13 +229,15 @@ impl ZbxClient {
         );
 
         // client HTTP/1.1 avec timeouts
-        let http = reqb::Client::builder()
+        #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+        let mut builder = reqb::Client::builder()
             .default_headers(headers)
             .http1_only()
             .user_agent(concat!("alerting/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(15))
-            .build()
-            .context("building blocking HTTP client")?;
+            .danger_accept_invalid_certs(true);
+
+        let http = builder.build().context("building blocking HTTP client")?;
 
         let payload = RpcRequest {
             jsonrpc: "2.0",
@@ -247,7 +251,7 @@ impl ZbxClient {
             .post(&self.url)
             .json(&payload)
             .send()
-            .with_context(|| format!("HTTP POST (blocking) to {}", self.url))?;
+            .with_context(|| format!("HTTP POST (blocking) to {} failed", self.url))?;
 
         let status = resp.status();
         let env: ZbxEnvelope<T> = resp

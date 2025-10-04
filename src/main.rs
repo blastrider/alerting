@@ -31,14 +31,45 @@ fn urgency_for_severity(sev: Severity) -> ToastUrgency {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp(None)
+        .try_init();
+
+    if let Err(err) = run().await {
+        eprintln!("Error: {:#}", err);
+        let mut source = err.source();
+        while let Some(cause) = source {
+            eprintln!("  Caused by: {cause}");
+            source = cause.source();
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
     // --- Config unifiée (ENV > fichier > défauts)
     let cfg = Config::load()?;
+
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(cmd) = args.get(0).map(|s| s.as_str()) {
+        #[cfg(target_os = "windows")]
+        if cmd == "toast-test" {
+            run_toast_test(&cfg, &args)?;
+            println!("Toast test envoyé.");
+            return Ok(());
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        if cmd == "toast-test" {
+            println!("La commande 'toast-test' est disponible uniquement sous Windows.");
+            return Ok(());
+        }
+    }
 
     // --- Client Zabbix
     let client = ZbxClient::new(&cfg.url, &cfg.token)?;
     // --- Mode CLI de test : `alerting ack <eventid> [message]` ou `alerting unack <eventid> [message]`
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
     if let Some(cmd) = args.get(0).map(|s| s.as_str()) {
         match cmd {
             "ack" => {
@@ -145,7 +176,19 @@ async fn main() -> Result<()> {
             unack_label: None,
         });
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        let ack_controls = if p.acknowledged {
+            None
+        } else {
+            Some(AckControls {
+                client: client.clone(),
+                eventid: p.eventid.clone(),
+                ask_message: true,
+                ack_label: Some("Valider".to_string()),
+            })
+        };
+
+        #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
         let ack_controls = None::<AckControls>;
 
         let _ = send_toast(
@@ -163,4 +206,39 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn run_toast_test(cfg: &Config, args: &[String]) -> Result<()> {
+    let summary = args
+        .get(1)
+        .cloned()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Alerting Test".to_string());
+    let body = if args.len() > 2 {
+        args[2..].join(" ")
+    } else {
+        summary.clone()
+    };
+
+    let timeout = compute_timeout(
+        cfg.notify_sticky,
+        cfg.notify_timeout_ms,
+        cfg.notify_timeout_default,
+    );
+
+    let ack_controls = None::<AckControls>;
+
+    send_toast(
+        &summary,
+        &body,
+        ToastUrgency::Normal,
+        timeout,
+        &cfg.notify_appname,
+        cfg.notify_icon.as_deref(),
+        None,
+        None,
+        &cfg.notify_open_label,
+        ack_controls,
+    )
 }
