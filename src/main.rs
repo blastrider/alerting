@@ -176,7 +176,19 @@ async fn run() -> Result<()> {
             unack_label: None,
         });
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        let ack_controls = if p.acknowledged {
+            None
+        } else {
+            Some(AckControls {
+                client: client.clone(),
+                eventid: p.eventid.clone(),
+                ask_message: true,
+                ack_label: Some("Valider".to_string()),
+            })
+        };
+
+        #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
         let ack_controls = None::<AckControls>;
 
         let _ = send_toast(

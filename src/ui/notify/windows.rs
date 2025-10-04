@@ -1,42 +1,36 @@
 use crate::zbx::ZbxClient;
 use anyhow::{Context, Result, anyhow};
-use std::ffi::OsStr;
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use tokio::runtime::Handle;
+use std::sync::mpsc;
+use std::time::Duration;
+use windows::Data::Xml::Dom::XmlDocument;
+use windows::Foundation::{EventRegistrationToken, IPropertyValue, TypedEventHandler};
+use windows::UI::Notifications::{
+    ToastActivatedEventArgs, ToastDismissalReason, ToastDismissedEventArgs, ToastFailedEventArgs,
+    ToastNotification, ToastNotificationManager,
+};
 use windows::Win32::Foundation::BOOL;
-use windows::Win32::System::Com::IPersistFile;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-    CoUninitialize,
+    CoUninitialize, IPersistFile,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
-use windows::core::{GUID, Interface, PCWSTR, PROPVARIANT};
+use windows::core::{GUID, HSTRING, IInspectable, Interface, PCWSTR, PROPVARIANT};
 use winrt_notification::{
     Duration as WinDuration, IconCrop, LoopableSound, Scenario, Sound, Toast,
 };
 
 use super::{ToastTimeout, ToastUrgency};
 
-/// Structure conservée pour compat, les toasts Windows ne supportent pas les actions.
 #[derive(Clone)]
 pub struct AckControls {
-    #[allow(dead_code)]
-    pub handle: Handle,
-    #[allow(dead_code)]
     pub client: ZbxClient,
-    #[allow(dead_code)]
     pub eventid: String,
-    #[allow(dead_code)]
     pub ask_message: bool,
-    #[allow(dead_code)]
-    pub allow_unack: bool,
-    #[allow(dead_code)]
     pub ack_label: Option<String>,
-    #[allow(dead_code)]
-    pub unack_label: Option<String>,
 }
 
 pub fn send_toast(
@@ -51,13 +45,6 @@ pub fn send_toast(
     _action_open_label: &str,
     ack_controls: Option<AckControls>,
 ) -> Result<()> {
-    if ack_controls.is_some() {
-        eprintln!("(ui) Ack/Unack non supporté sur Windows, bouton ignoré");
-    }
-    if action_open.is_some() {
-        eprintln!("(ui) Bouton 'Ouvrir' non interactif sur Windows (non supporté)");
-    }
-
     let toast_app_id = if appname.trim().is_empty() {
         Toast::POWERSHELL_APP_ID
     } else {
@@ -66,6 +53,27 @@ pub fn send_toast(
 
     if let Err(err) = ensure_app_registration(toast_app_id) {
         eprintln!("(ui) impossible d’enregistrer l’AppUserModelID '{toast_app_id}': {err:#}");
+    }
+
+    if let Some(ack_controls) = ack_controls {
+        if action_open.is_some() {
+            eprintln!(
+                "(ui) Bouton 'Ouvrir' ignoré sur Windows pour les toasts interactifs — non implémenté",
+            );
+        }
+        return send_interactive_ack_toast(
+            summary,
+            body,
+            urgency,
+            timeout,
+            toast_app_id,
+            icon,
+            ack_controls,
+        );
+    }
+
+    if action_open.is_some() {
+        eprintln!("(ui) Bouton 'Ouvrir' non interactif sur Windows (non supporté)");
     }
 
     let (duration, scenario) = map_timeout(timeout);
@@ -117,6 +125,156 @@ pub fn send_toast(
     toast
         .show()
         .map_err(|err| anyhow!("échec toast WinRT: {err}"))?;
+
+    Ok(())
+}
+
+fn send_interactive_ack_toast(
+    summary: &str,
+    body: &str,
+    urgency: ToastUrgency,
+    timeout: ToastTimeout,
+    app_id: &str,
+    icon: Option<&Path>,
+    ack_controls: AckControls,
+) -> Result<()> {
+    let AckControls {
+        client,
+        eventid,
+        ask_message,
+        ack_label,
+    } = ack_controls;
+
+    let ack_label = ack_label.unwrap_or_else(|| "Valider".to_string());
+    let placeholder = if ask_message {
+        Some("Commentaire (optionnel)")
+    } else {
+        None
+    };
+
+    let (duration, scenario) = map_timeout(timeout);
+    let sound = map_sound(urgency, matches!(timeout, ToastTimeout::Never));
+
+    let toast_definition = build_ack_toast_xml(
+        summary,
+        body,
+        icon,
+        &ack_label,
+        ask_message,
+        placeholder,
+        duration,
+        scenario,
+        sound,
+    );
+
+    let _apartment = ComApartment::new()?;
+
+    let document = XmlDocument::new()?;
+    document.LoadXml(&HSTRING::from(toast_definition))?;
+
+    let toast = ToastNotification::CreateToastNotification(&document)?;
+    let (tx, rx) = mpsc::channel::<ToastSignal>();
+
+    let activated_sender = tx.clone();
+    let activated_token: EventRegistrationToken = toast.Activated(&TypedEventHandler::new(
+        move |_sender: &Option<ToastNotification>, args: &Option<IInspectable>| {
+            if let Some(args) = args {
+                if let Ok(args) = args.cast::<ToastActivatedEventArgs>() {
+                    let arguments = args.Arguments().unwrap_or_default().to_string();
+                    if arguments == "ack" {
+                        let user_text = args
+                            .UserInput()
+                            .ok()
+                            .and_then(|input| input.Lookup(&HSTRING::from("ackMessage")).ok())
+                            .and_then(|value| value.cast::<IPropertyValue>().ok())
+                            .and_then(|value| value.GetString().ok())
+                            .map(|s| s.to_string());
+                        let _ = activated_sender.send(ToastSignal::Ack { message: user_text });
+                    } else {
+                        let _ = activated_sender.send(ToastSignal::Activated(arguments));
+                    }
+                }
+            }
+            Ok(())
+        },
+    ))?;
+
+    let dismissed_sender = tx.clone();
+    let dismissed_token: EventRegistrationToken = toast.Dismissed(&TypedEventHandler::new(
+        move |_sender: &Option<ToastNotification>, args: &Option<ToastDismissedEventArgs>| {
+            if let Some(args) = args {
+                let reason = args.Reason()?;
+                let _ = dismissed_sender.send(ToastSignal::Dismissed(reason));
+            }
+            Ok(())
+        },
+    ))?;
+
+    let failure_sender = tx.clone();
+    let failed_token: EventRegistrationToken = toast.Failed(&TypedEventHandler::new(
+        move |_sender: &Option<ToastNotification>, args: &Option<ToastFailedEventArgs>| {
+            let message = if let Some(args) = args {
+                match args.ErrorCode() {
+                    Ok(code) => format!("HRESULT 0x{:08X}", code.0 as u32),
+                    Err(_) => "code inconnu".to_owned(),
+                }
+            } else {
+                "erreur inconnue".to_owned()
+            };
+            let _ = failure_sender.send(ToastSignal::Failed(message));
+            Ok(())
+        },
+    ))?;
+
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app_id))?;
+    notifier.Show(&toast)?;
+    println!("Toast Windows affiché ({eventid}) — cliquez sur '{ack_label}' pour acquitter.");
+
+    let outcome = rx.recv_timeout(Duration::from_secs(300));
+
+    let _ = toast.RemoveActivated(activated_token);
+    let _ = toast.RemoveDismissed(dismissed_token);
+    let _ = toast.RemoveFailed(failed_token);
+
+    match outcome {
+        Ok(ToastSignal::Ack { message }) => {
+            let trimmed = message
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            let has_msg = trimmed.is_some();
+
+            if let Err(err) = client.ack_event_blocking(&eventid, trimmed.clone()) {
+                eprintln!("(ui) ack Windows échoué eid={eventid}: {err:#}");
+                if has_msg {
+                    if let Err(fallback) = client.ack_event_blocking(&eventid, None) {
+                        return Err(fallback.context("échec ACK (fallback sans message)"));
+                    }
+                    eprintln!("(ui) ACK sans message envoyé en repli eid={eventid}");
+                } else {
+                    return Err(err.context("échec ACK"));
+                }
+            } else {
+                eprintln!("[ui] ACK Windows OK eid={eventid} (msg={})", has_msg);
+            }
+        }
+        Ok(ToastSignal::Activated(arguments)) => {
+            eprintln!("(ui) activation inattendue: {arguments}");
+        }
+        Ok(ToastSignal::Dismissed(reason)) => {
+            eprintln!("(ui) toast fermé (reason={reason:?}) eid={eventid}");
+        }
+        Ok(ToastSignal::Failed(message)) => {
+            return Err(anyhow!("Toast Windows échec: {message}"));
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!("(ui) toast expiré sans interaction eid={eventid}");
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            eprintln!("(ui) canal de toast déconnecté eid={eventid}");
+        }
+    }
 
     Ok(())
 }
@@ -222,6 +380,188 @@ fn to_wide_path(path: &Path) -> Vec<u16> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect()
+}
+
+fn build_ack_toast_xml(
+    summary: &str,
+    body: &str,
+    icon: Option<&Path>,
+    ack_label: &str,
+    include_input: bool,
+    placeholder: Option<&str>,
+    duration: WinDuration,
+    scenario: Option<Scenario>,
+    sound: Option<Sound>,
+) -> String {
+    let mut text_nodes: Vec<String> = Vec::new();
+
+    if !summary.trim().is_empty() {
+        text_nodes.push(escape_text(summary.trim()));
+    }
+
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            text_nodes.push(escape_text(trimmed));
+        }
+    }
+
+    if text_nodes.is_empty() {
+        text_nodes.push(String::from("Notification"));
+    }
+
+    let mut binding_children = String::new();
+
+    if let Some(icon_path) = icon {
+        let icon_uri = escape_attr(&file_uri(icon_path));
+        let alt = escape_attr(summary);
+        binding_children.push_str(&format!(
+            "<image placement=\"appLogoOverride\" src=\"{}\" alt=\"{}\" />",
+            icon_uri, alt
+        ));
+    }
+
+    for text in &text_nodes {
+        binding_children.push_str(&format!("<text>{text}</text>"));
+    }
+
+    let mut visual = String::from("<visual><binding template=\"ToastGeneric\">");
+    visual.push_str(&binding_children);
+    visual.push_str("</binding></visual>");
+
+    let duration_attr = match duration {
+        WinDuration::Short => "duration=\"short\"",
+        WinDuration::Long => "duration=\"long\"",
+    };
+
+    let scenario_attr = scenario.and_then(scenario_to_attr);
+
+    let audio_fragment = sound_fragment(sound);
+
+    let mut actions = String::new();
+    actions.push_str("<actions>");
+    if include_input {
+        let placeholder = escape_attr(placeholder.unwrap_or(""));
+        actions.push_str(&format!(
+            "<input id=\"ackMessage\" type=\"text\" placeHolderContent=\"{}\" />",
+            placeholder
+        ));
+    }
+    let ack_label = escape_attr(ack_label);
+    if include_input {
+        actions.push_str(&format!(
+            "<action content=\"{}\" arguments=\"ack\" activationType=\"foreground\" hint-inputId=\"ackMessage\" />",
+            ack_label
+        ));
+    } else {
+        actions.push_str(&format!(
+            "<action content=\"{}\" arguments=\"ack\" activationType=\"foreground\" />",
+            ack_label
+        ));
+    }
+    actions.push_str("</actions>");
+
+    let mut toast = String::from("<toast ");
+    toast.push_str(duration_attr);
+    if let Some(attr) = scenario_attr {
+        toast.push(' ');
+        toast.push_str(&attr);
+    }
+    toast.push('>');
+    toast.push_str(&visual);
+    toast.push_str(&actions);
+    if !audio_fragment.is_empty() {
+        toast.push_str(&audio_fragment);
+    }
+    toast.push_str("</toast>");
+
+    toast
+}
+
+fn scenario_to_attr(scenario: Scenario) -> Option<String> {
+    match scenario {
+        Scenario::Default => None,
+        Scenario::Alarm => Some("scenario=\"alarm\"".to_string()),
+        Scenario::Reminder => Some("scenario=\"reminder\"".to_string()),
+        Scenario::IncomingCall => Some("scenario=\"incomingCall\"".to_string()),
+    }
+}
+
+fn sound_fragment(sound: Option<Sound>) -> String {
+    match sound {
+        None => "<audio silent=\"true\" />".to_string(),
+        Some(Sound::Default) => String::new(),
+        Some(Sound::Loop(loopable)) => format!(
+            "<audio loop=\"true\" src=\"ms-winsoundevent:Notification.Looping.{}\" />",
+            loopable
+        ),
+        Some(Sound::Single(loopable)) => format!(
+            "<audio src=\"ms-winsoundevent:Notification.Looping.{}\" />",
+            loopable
+        ),
+        Some(other) => format!("<audio src=\"ms-winsoundevent:Notification.{}\" />", other),
+    }
+}
+
+fn escape_text(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn escape_attr(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn file_uri(path: &Path) -> String {
+    let mut uri = String::from("file:///");
+    let raw = path.to_string_lossy().replace('\\', "/");
+    uri.push_str(&raw);
+    uri
+}
+
+struct ComApartment;
+
+impl ComApartment {
+    fn new() -> Result<Self> {
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        unsafe {
+            CoUninitialize();
+        }
+    }
+}
+
+enum ToastSignal {
+    Ack { message: Option<String> },
+    Activated(String),
+    Dismissed(ToastDismissalReason),
+    Failed(String),
 }
 
 const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
