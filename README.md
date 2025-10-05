@@ -23,6 +23,7 @@ ack_filter = "unack"
 
 [notify]
 appname = ""
+appname = "Check Agent"
 sticky = false
 open_label = "Open in Zabbix"
 notify_acked = false
