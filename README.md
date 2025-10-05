@@ -15,7 +15,8 @@ Chaque toast peut **ouvrir Zabbix**, **acknowledge** ou **unacknowledge** le pro
   * **Ouvrir** dans Zabbix (URL paramétrable), ne fonctionne pas quand Firefox est navigateur web par défaut, mais ok Brave
   * **Ack** / **Unack** (appelle `event.acknowledge`)
   * **Message** facultatif saisi via `zenity --entry`
-  * Sous **Windows 11**, un bouton **Valider** permet l’ack direct (commentaire optionnel) depuis le toast
+* Sous **Windows 11**, un bouton **Valider** permet l’ack direct (commentaire optionnel) depuis le toast.
+  Si l’icône (`notify.icon`) est introuvable, Windows retombe sur la tuile générique "New notification".
 * Concurrency contrôlée pour les appels API
 * **Configuration** par fichier TOML + variables d’environnement (ENV > fichier > défauts)
 
@@ -155,6 +156,7 @@ journalctl --user -u alerting -f
 * Config : `config.toml` peut être placé dans `%APPDATA%\alerting\config.toml` (mêmes clés que la version Linux).
 * Lancer : `target\x86_64-pc-windows-msvc\release\alerting.exe` depuis un terminal PowerShell.
 * Interaction : bouton **Valider** intégré pour acquitter l’alerte (commentaire optionnel saisi dans le toast).
+  Les toasts utilisent l’icône configurée (`notify.icon`). Si ce chemin est invalide, la notification générique Windows (titre "New notification") est affichée.
 * Limitations actuelles : le bouton « Ouvrir » reste inactif sur Windows, les toasts ne proposent pas d’Unack.
 * Pour l’exécution au démarrage, créer une tâche planifiée (Task Scheduler) pointant vers `alerting.exe` avec `Start in` défini sur le dossier de config.
 
