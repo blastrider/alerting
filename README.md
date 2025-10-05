@@ -65,7 +65,7 @@ ack_filter = "unack"                 # "unack" | "ack" | "all"
 open_url_fmt = "https://zabbix.example.com/zabbix.php?action=problem.view&filter_eventid={eventid}"
 
 [notify]
-appname = "Innlog Agent"
+appname = "Check Agent"
 sticky = false
 timeout_ms = 8000
 timeout_default = false
