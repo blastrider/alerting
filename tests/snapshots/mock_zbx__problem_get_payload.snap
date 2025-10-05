@@ -1,0 +1,28 @@
+---
+source: tests/mock_zbx.rs
+assertion_line: 102
+expression: body
+---
+{
+  "auth": "token",
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "problem.get",
+  "params": {
+    "acknowledged": true,
+    "limit": 5,
+    "output": [
+      "eventid",
+      "name",
+      "severity",
+      "clock",
+      "lastchange",
+      "acknowledged"
+    ],
+    "recent": false,
+    "sortfield": [
+      "eventid"
+    ],
+    "sortorder": "DESC"
+  }
+}

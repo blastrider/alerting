@@ -1,0 +1,26 @@
+[advisories]
+ignore = []
+
+[bans]
+denied = [
+  { name = "native-tls" }
+]
+
+[licenses]
+default = "deny"
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-3-Clause",
+  "BSD-2-Clause",
+  "ISC",
+  "Unicode-DFS-2016",
+  "Unlicense",
+  "CC0-1.0"
+]
+exceptions = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allowed-registries = ["https://github.com/rust-lang/crates.io-index"]

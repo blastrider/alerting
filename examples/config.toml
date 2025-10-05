@@ -1,0 +1,18 @@
+[zabbix]
+url = "https://zabbix.innlog.fr/api_jsonrpc.php"
+limit = 25
+concurrency = 6
+ack_filter = "unack"
+open_url_fmt = "https://zabbix.innlog.fr/zabbix.php?action=problem.view&filter_eventid={eventid}"
+
+[notify]
+appname = "Alerting"
+sticky = false
+open_label = "Open in Zabbix"
+notify_acked = false
+
+[app]
+max_notif = 5
+queue_capacity = 32
+rate_limit_max = 5
+rate_limit_window = "5s"

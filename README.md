@@ -1,207 +1,89 @@
-# Alerting – Zabbix → Notifications Linux (Ack/Unack)
+# Alerting
 
-Petit binaire Rust qui récupère les **problèmes Zabbix** via l’API JSON-RPC et affiche des **notifications système** (Linux Mint/Cinnamon, libnotify).
-Chaque toast peut **ouvrir Zabbix**, **acknowledge** ou **unacknowledge** le problème, avec **message optionnel**.
+Zabbix JSON-RPC client that turns active problems into safe, rate-limited desktop notifications with structured tracing and hardened systemd packaging.
 
----
+## Getting Started
+1. `cargo install --path . --locked`
+2. `mkdir -p ~/.config/alerting` and drop a copy of `examples/config.toml` there
+3. Export `ZBX_TOKEN` or add it to the config file (never commit it)
+4. Run `alerting --config ~/.config/alerting/config.toml --once` to validate credentials
+5. Optional: `just ci` to check fmt/clippy/tests/audit locally
+6. Install the user service: `systemctl --user enable --now alerting.service` (see packaging section)
 
-## ✨ Fonctionnalités
-
-* Récupération des problèmes actifs (`problem.get`) avec filtre **ACK/UNACK/ALL**
-* Résolution du **nom d’hôte** lié à chaque événement
-* **Notifications** avec niveau d’urgence selon la sévérité Zabbix
-* **Boutons intégrés** :
-
-  * **Ouvrir** dans Zabbix (URL paramétrable), ne fonctionne pas quand Firefox est navigateur web par défaut, mais ok Brave
-  * **Ack** / **Unack** (appelle `event.acknowledge`)
-  * **Message** facultatif saisi via `zenity --entry`
-* Sous **Windows 11**, un bouton **Valider** permet l’ack direct (commentaire optionnel) depuis le toast.
-  Si l’icône (`notify.icon`) est introuvable, Windows retombe sur la tuile générique "New notification".
-* Concurrency contrôlée pour les appels API
-* **Configuration** par fichier TOML + variables d’environnement (ENV > fichier > défauts)
-
----
-
-## ⚙️ Prérequis
-
-* Linux (Mint 22 recommandé)
-* Zabbix >= 5.x (API JSON-RPC active, **token** API)
-* Paquets système :
-
-  ```bash
-  sudo apt-get update
-  sudo apt-get install -y xdg-utils zenity  # libnotify est déjà présent sur Mint
-  ```
-
----
-
-## 🚀 Build & installation
-
-```bash
-# Build release
-cargo build --release
-
-# Installer le binaire
-sudo install -Dm755 target/release/alerting /usr/local/bin/alerting
-```
-
----
-
-## 🔧 Configuration
-
-Le binaire charge, par ordre de priorité : **ENV** > **fichier** > **valeurs par défaut**.
-
-* **Fichier par défaut** : `CONFIG_FILE` (si défini) sinon `config.toml` dans le cwd.
-  Recommandé : `~/.config/alerting/config.toml`
+## Configuration
+The loader merges **defaults < file < environment**. All durations accept [humantime](https://docs.rs/humantime) strings (`30s`, `5m` …).
 
 ```toml
 # ~/.config/alerting/config.toml
 [zabbix]
-url = "https://zabbix.example.com/api_jsonrpc.php"
-# token = "xxxxxxxx..."              # ou via ENV ZBX_TOKEN
-limit = 20
-concurrency = 8
-ack_filter = "unack"                 # "unack" | "ack" | "all"
-open_url_fmt = "https://zabbix.example.com/zabbix.php?action=problem.view&filter_eventid={eventid}"
+url = "https://monitoring.example.com/api_jsonrpc.php"
+limit = 25
+concurrency = 6
+ack_filter = "unack"
 
 [notify]
-appname = "Innlog Agent"
+appname = ""
 sticky = false
-timeout_ms = 8000
-timeout_default = false
-open_label = "Ouvrir dans Zabbix"
-notify_acked = false                 # cacher les problèmes déjà ACK
+open_label = "Open in Zabbix"
+notify_acked = false
 
 [app]
 max_notif = 5
+queue_capacity = 32
+rate_limit_max = 5
+rate_limit_window = "5s"
 ```
 
-### Variables d’environnement
+### Environment overrides
+| Variable | Description | Default |
+| --- | --- | --- |
+| `CONFIG_FILE` | Alternative config path | `config.toml` in cwd |
+| `ZBX_URL` | JSON-RPC endpoint | config value |
+| `ZBX_TOKEN` | API token (required) | — |
+| `LIMIT` | Max problems fetched per poll | `limit` field |
+| `CONCURRENCY` | Parallel host lookups | `concurrency` field |
+| `ACK_FILTER` | `ack`, `unack`, or `all` | `ack_filter` |
+| `MAX_NOTIF` | Cap notifications per loop (1..=100) | `max_notif` |
+| `NOTIFY_STICKY` | Make toasts persistent | `sticky` |
+| `POLL_INTERVAL` | Interval between polls | `poll_interval` |
+| `RATE_LIMIT_MAX` / `_WINDOW` | Leaky bucket budget | see file |
 
-| Nom                      | Rôle                                                 | Ex.                                  |
-| ------------------------ | ---------------------------------------------------- | ------------------------------------ |
-| `ZBX_URL`                | Endpoint JSON-RPC Zabbix                             | `https://…/api_jsonrpc.php`          |
-| `ZBX_TOKEN`              | **Token API** (prioritaire sur le TOML)              | `xxxxxxxx…`                          |
-| `LIMIT`                  | Nombre max de problèmes à récupérer                  | `20`                                 |
-| `CONCURRENCY`            | Appels parallèles pour la résolution d’hôtes         | `8`                                  |
-| `ACK_FILTER`             | Filtre de récupération : `unack` / `ack` / `all`     | `unack`                              |
-| `MAX_NOTIF`              | Nombre max de toasts affichés                        | `5`                                  |
-| `NOTIFY_APPNAME`         | Nom d’application des toasts                         | `Innlog Agent`                       |
-| `NOTIFY_STICKY`          | `true` = toasts persistants                          | `false`                              |
-| `NOTIFY_TIMEOUT_MS`      | Timeout custom des toasts (ms)                       | `8000`                               |
-| `NOTIFY_TIMEOUT_DEFAULT` | Utiliser le timeout par défaut du système            | `false`                              |
-| `NOTIFY_ICON`            | Chemin d’icône                                       | `/path/icon.png`                     |
-| `NOTIFY_OPEN_LABEL`      | Libellé du bouton « Ouvrir »                         | `Ouvrir dans Zabbix`                 |
-| `NOTIFY_ACKED`           | Afficher aussi les problèmes déjà ACK                | `false`                              |
-| `ZBX_OPEN_URL_FMT`       | URL « Ouvrir » (placeholder `{eventid}` obligatoire) | `https://…&filter_eventid={eventid}` |
-| `CONFIG_FILE`            | Chemin du fichier TOML                               | `~/.config/alerting/config.toml`     |
+### Telemetry
+Tracing uses `RUST_LOG` (default `info`). `--json-logs` switches to JSON formatting when the binary is built with the `json-logs` feature.
 
----
-
-## ▶️ Exécution
-
-### Premier test (foreground)
-
-```bash
-CONFIG_FILE=~/.config/alerting/config.toml ZBX_TOKEN=xxxxxxxx /usr/local/bin/alerting
+### CLI
 ```
-
-### Service systemd **utilisateur** (recommandé)
-
-```bash
-mkdir -p ~/.config/alerting ~/.config/systemd/user
-chmod 700 ~/.config/alerting
-
-# Option : token séparé
-cat >~/.config/alerting/alerting.env <<'ENV'
-ZBX_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-ENV
-chmod 600 ~/.config/alerting/alerting.env
-
-cat >~/.config/systemd/user/alerting.service <<'UNIT'
-[Unit]
-Description=Alerting (Zabbix toaster + Ack/Unack)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/alerting
-Environment=CONFIG_FILE=%h/.config/alerting/config.toml
-EnvironmentFile=%h/.config/alerting/alerting.env
-Restart=always
-RestartSec=5
-NoNewPrivileges=yes
-ProtectSystem=full
-PrivateTmp=yes
-LockPersonality=yes
-MemoryDenyWriteExecute=yes
-
-[Install]
-WantedBy=default.target
-UNIT
-
-systemctl --user daemon-reload
-systemctl --user enable --now alerting.service
-journalctl --user -u alerting -f
+USAGE: alerting [FLAGS]
+    --config <PATH>      # Config file override (default: config.toml)
+    --interval <DUR>     # Override poll interval (humantime)
+    --max-notif <N>      # Limit notifications per loop (1..=100)
+    --once               # Single poll, then exit
+    --dry-run            # Log queue entries, skip desktop notifications
+    --insecure           # Allow plain HTTP endpoints (⚠️ only on trusted networks)
+    --json-logs          # Enable JSON tracing layout when compiled with json-logs
 ```
+Each request is tagged with a correlation id header (`x-correlation-id`) and logged along with event id, host, severity and queue latency.
 
-> **Pourquoi “user service” ?** Les toasts et boutons Ack/Unack utilisent le **bus D-Bus de session** (notifications interactives). Un service “system” ne verrait pas ta session graphique.
+## Scheduling & Packaging
+* Hardened user service at `packaging/systemd/user/alerting.service` – install via `systemctl --user enable --now alerting`.
+* `.deb` metadata ready for [`cargo-deb`](https://github.com/mmstick/cargo-deb): `cargo deb` produces a package shipping the binary and the user unit under `/usr/share/doc/alerting`.
+* Windows MSI template (`packaging/msi/alerting.wxs`) targets per-user installs with fixed GUIDs; provide `AlertingExecutable` to `candle`/`light`.
 
----
+## Security Notes
+* Store `ZBX_TOKEN` outside Git, ideally via an environment file (`chmod 600`).
+* By default HTTPS is enforced; `--insecure` and HTTP URLs are rejected unless explicitly allowed.
+* Notifications suppresss secrets in logs (`SecretString`).
 
-## 🪟 Windows 11
+## Troubleshooting
+| Symptom | Check |
+| --- | --- |
+| `5xx` errors | Zabbix maintenance, missing proxy headers, or rate limits – inspect structured logs with the correlation id |
+| `timeout while fetching` | Increase `poll_interval`/`limit`, verify outbound connectivity, ensure system clock is correct |
+| Proxy in path | Set `HTTPS_PROXY`/`NO_PROXY` before launching the service |
+| Empty toasts | Enable `RUST_LOG=debug` to inspect payloads and confirm `ack_filter` |
 
-* Build : `rustup target add x86_64-pc-windows-msvc` puis `cargo build --release --target x86_64-pc-windows-msvc`.
-* Config : `config.toml` peut être placé dans `%APPDATA%\alerting\config.toml` (mêmes clés que la version Linux).
-* Lancer : `target\x86_64-pc-windows-msvc\release\alerting.exe` depuis un terminal PowerShell.
-* Interaction : bouton **Valider** intégré pour acquitter l’alerte (commentaire optionnel saisi dans le toast).
-  Les toasts utilisent l’icône configurée (`notify.icon`). Si ce chemin est invalide, la notification générique Windows (titre "New notification") est affichée.
-* Limitations actuelles : le bouton « Ouvrir » reste inactif sur Windows, les toasts ne proposent pas d’Unack.
-* Pour l’exécution au démarrage, créer une tâche planifiée (Task Scheduler) pointant vers `alerting.exe` avec `Start in` défini sur le dossier de config.
+## Testing
+`just ci` wraps `cargo fmt`, `cargo clippy`, `cargo nextest`, `cargo deny`, `cargo audit`, and `cargo geiger`. Integration tests spawn local mock servers; when sandboxed, grant permission to bind loopback sockets (`cargo test` with escalated permissions in the CI workflow).
 
----
-
-## 🖱️ Interaction des toasts
-
-* **Ouvrir** : lance `xdg-open` avec l’URL construite via `open_url_fmt` (remplacement `{eventid}`).
-* **Ack** : appelle `event.acknowledge` avec **bitmask** `2` (et `+4` si message saisi).
-* **Unack** : bitmask `16` (et `+4` si message saisi).
-* **Message optionnel** : si activé dans le binaire, une boîte `zenity --entry` s’ouvre.
-  Si vide/annulé/`zenity` absent → envoi **sans message**.
-
----
-
-## 🔍 Dépannage rapide
-
-* **Parse error (JSON)** côté Zabbix : généralement un problème d’échappement si tu construis du JSON à la main. Le binaire sérialise proprement, mais vérifie l’URL API et le **token**.
-* **Pas de notifications** : vérifier la session (test `notify-send "test"`), et que le service tourne en mode **user**.
-* **Boutons inactifs** : vérifier `xdg-utils` et la présence de `zenity` (facultatif mais conseillé).
-* **403/permission** : l’utilisateur API doit avoir les droits **Read/Write** sur les objets visés (Ack/Unack).
-
----
-
-## 🧱 Sécurité
-
-* Stocke le **token** dans `~/.config/alerting/alerting.env` (600) ou via un gestionnaire de secrets.
-* Le service applique des options systemd de confinement raisonnables, compatibles avec l’UI.
-
----
-
-## 🧪 Dév
-
-```bash
-cargo fmt
-cargo clippy -- -D warnings
-cargo run
-```
-
----
-
-## 📄 Licence
-
-Voir `LICENSE` dans le dépôt.
-
-## Disclaimer
-
-Le logiciel vient tel quel sans garanties.
+## License
+Licensed under the terms described in `LICENSE`.
