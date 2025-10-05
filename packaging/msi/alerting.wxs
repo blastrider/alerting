@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+      Id="{5E5C86A5-2C30-4B37-8900-7C9D0E4D1A7A}"
+      Name="Alerting"
+      Language="1033"
+      Version="1.0.0"
+      Manufacturer="Alerting"
+      UpgradeCode="{6D4F9B52-1AA1-4F9C-8AA2-B23D1562A21E}">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" />
+
+    <MajorUpgrade AllowDowngrades="no" Schedule="afterInstallInitialize" />
+
+    <MediaTemplate />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLFOLDER" Name="Alerting" />
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Level="1">
+      <ComponentGroupRef Id="AlertingComponents" />
+    </Feature>
+  </Product>
+
+  <Fragment>
+    <ComponentGroup Id="AlertingComponents">
+      <Component Id="AlertingBinary" Guid="{8A9531A4-6D82-4F13-861D-0F8DC8D302FD}">
+        <File Id="AlertingExe" Source="$(var.AlertingExecutable)" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

@@ -1,0 +1,23 @@
+[Unit]
+Description=Alerting Zabbix -> Desktop
+After=network-online.target
+
+[Service]
+ExecStart=%h/.cargo/bin/alerting --config %h/.config/alerting/config.toml
+Restart=on-failure
+RestartSec=3
+Environment=RUST_LOG=info
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+PrivateDevices=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ReadWritePaths=%h/.config/alerting
+SystemCallFilter=@system-service @pkey @chown @io-file
+
+[Install]
+WantedBy=default.target

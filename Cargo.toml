@@ -3,23 +3,50 @@ name = "alerting"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+json-logs = ["tracing-subscriber/json"]
+dev-toast-test = []
+
 [dependencies]
 anyhow = "1.0"
+async-channel = "1.9"
+backoff = { version = "0.4", features = ["tokio"] }
 chrono = { version = "0.4", features = ["clock"] }
+config = { version = "0.14", default-features = false, features = ["toml"] }
+clap = { version = "4.5", features = ["derive"] }
+humantime = "2.1"
+lru = "0.12"
+secrecy = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-toml = "0.8"
-env_logger = { version = "0.11", default-features = false }
-log = "0.4"
+serde_with = "3.6"
+thiserror = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+uuid = { version = "1", features = ["v4", "v7"] }
+url = "2.5"
+
+[dev-dependencies]
+insta = { version = "1.39", features = ["json"] }
+wiremock = "0.6"
+
+[package.metadata.deb]
+maintainer = "Alerting Maintainers <ops@example.com>"
+section = "utils"
+priority = "optional"
+assets = [
+  ["target/release/alerting", "usr/bin/alerting", "755"],
+  ["packaging/systemd/user/alerting.service", "usr/share/doc/alerting/alerting.service", "644"]
+]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 notify-rust = "4"
-reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winrt-notification = "0.5"
-reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Com",
@@ -31,3 +58,18 @@ windows = { version = "0.58", features = [
     "Foundation",
     "Foundation_Collections",
 ] }
+winrt-notification = "0.5"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = "warn"
+nursery = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+
+[[bin]]
+name = "toast-test"
+path = "src/bin/toast-test.rs"
+required-features = ["dev-toast-test"]
