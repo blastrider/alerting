@@ -126,8 +126,8 @@ jobs:
           $alertingExe = Join-Path $env:GITHUB_WORKSPACE 'target\x86_64-pc-windows-msvc\release\alerting.exe'
           $launcherExe = Join-Path $env:GITHUB_WORKSPACE 'target\launcher\AlertingLauncher.exe'
           & $wix build packaging\msi\alerting.wxs `
-            -dAlertingExecutable="$alertingExe" `
-            -dAlertingLauncherExecutable="$launcherExe" `
+            -d:AlertingExecutable="$alertingExe" `
+            -d:AlertingLauncherExecutable="$launcherExe" `
             -o alerting.msi
 
       - name: Upload MSI artifact
