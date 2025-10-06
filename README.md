@@ -35,6 +35,8 @@ rate_limit_max = 5
 rate_limit_window = "5s"
 ```
 
+> ℹ️  Stand-alone Windows builds should keep `appname = ""` (fallback PowerShell AUMID). Once the MSI package registers the custom launcher you can switch to `appname = "Alerting"` to display banners under that name.
+
 ### Environment overrides
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -68,7 +70,17 @@ Each request is tagged with a correlation id header (`x-correlation-id`) and log
 ## Scheduling & Packaging
 * Hardened user service at `packaging/systemd/user/alerting.service` – install via `systemctl --user enable --now alerting`.
 * `.deb` metadata ready for [`cargo-deb`](https://github.com/mmstick/cargo-deb): `cargo deb` produces a package shipping the binary and the user unit under `/usr/share/doc/alerting`.
-* Windows MSI template (`packaging/msi/alerting.wxs`) targets per-user installs with fixed GUIDs; provide `AlertingExecutable` to `candle`/`light`.
+* Windows packaging flow (custom AppUserModelID):
+  1. Build the launcher stub `dotnet publish packaging/windows/AppIdLauncher/AlertingLauncher.csproj -c Release -r win-x64 -o target/launcher --self-contained false`.
+  2. Install WiX v4 (one-time): `dotnet tool install --global wix`.
+  3. From the repo root, run
+     ```powershell
+     wix build packaging/msi/alerting.wxs `
+       -dAlertingExecutable="C:\\chemin\\vers\\target\\x86_64-pc-windows-msvc\\release\\alerting.exe" `
+       -dAlertingLauncherExecutable="C:\\chemin\\vers\\target\\launcher\\AlertingLauncher.exe" `
+       -o alerting.msi
+     ```
+  4. The resulting `alerting.msi` installs both binaries under `%LocalAppData%\Alerting` and provides a Start Menu shortcut that runs the launcher. The launcher applies `AppUserModelID="Alerting"` before spawning `alerting.exe`, so toast banners display under that name.
 
 ## Security Notes
 * Store `ZBX_TOKEN` outside Git, ideally via an environment file (`chmod 600`).

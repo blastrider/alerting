@@ -1,49 +1,58 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product
-      Id="{5E5C86A5-2C30-4B37-8900-7C9D0E4D1A7A}"
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
       Name="Alerting"
-      Language="1033"
-      Version="1.0.0"
       Manufacturer="Alerting"
-      UpgradeCode="{6D4F9B52-1AA1-4F9C-8AA2-B23D1562A21E}">
-    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" />
+      Version="1.0.0"
+      Language="1033"
+      UpgradeCode="{6D4F9B52-1AA1-4F9C-8AA2-B23D1562A21E}"
+      InstallerVersion="500"
+      Compressed="yes"
+      Scope="perUser">
 
-    <MajorUpgrade AllowDowngrades="no" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Alerting is already installed." />
 
-    <MediaTemplate EmbedCab="yes" />
+    <Media/>
 
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="LocalAppDataFolder">
-        <Directory Id="INSTALLFOLDER" Name="Alerting" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="Alerting">
+        <Component Id="cmpAlertingExe" Guid="{8A9531A4-6D82-4F13-861D-0F8DC8D302FD}" Directory="INSTALLFOLDER">
+          <File Id="AlertingExe" Source="$(var.AlertingExecutable)" />
+        </Component>
+        <Component Id="cmpLauncherExe" Guid="{A7B9E534-5F16-4F2A-9841-570F7C3B6F32}" Directory="INSTALLFOLDER">
+          <File Id="AlertingLauncherExe" Source="$(var.AlertingLauncherExecutable)" />
+        </Component>
       </Directory>
-      <Directory Id="ProgramMenuFolder">
-        <Directory Id="AlertingProgramMenu" Name="Alerting" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ShortcutDir" Name="Alerting">
+        <Component Id="cmpShortcut" Guid="{C0C072E7-8B46-4BDB-ADFB-99F36F7640F5}" Directory="ShortcutDir">
+          <Shortcut
+              Id="AlertingShortcut"
+              Name="Alerting"
+              Target="[#AlertingLauncherExe]"
+              WorkingDirectory="INSTALLFOLDER"
+              AppUserModelID="Alerting" />
+          <RegistryValue
+              Root="HKCU"
+              Key="Software\\Alerting"
+              Name="Installer"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+        </Component>
       </Directory>
-    </Directory>
+    </StandardDirectory>
 
-    <Feature Id="Main" Level="1">
-      <ComponentGroupRef Id="AlertingComponents" />
-    </Feature>
-  </Product>
-
-  <Fragment>
-    <DirectoryRef Id="INSTALLFOLDER">
-      <Component Id="AlertingBinary" Guid="{8A9531A4-6D82-4F13-861D-0F8DC8D302FD}">
-        <File Id="AlertingExe" Source="$(var.AlertingExecutable)" KeyPath="yes" />
-      </Component>
-    </DirectoryRef>
-
-    <DirectoryRef Id="AlertingProgramMenu">
-      <Component Id="StartMenuShortcut" Guid="{C0C072E7-8B46-4BDB-ADFB-99F36F7640F5}">
-        <Shortcut Id="AlertingStartMenuShortcut" Name="Alerting" Target="[INSTALLFOLDER]alerting.exe" WorkingDirectory="INSTALLFOLDER" />
-        <RegistryValue Root="HKCU" Key="Software\\Alerting" Name="StartMenuShortcut" Type="string" Value="1" KeyPath="yes" />
-      </Component>
-    </DirectoryRef>
-
-    <ComponentGroup Id="AlertingComponents">
-      <ComponentRef Id="AlertingBinary" />
-      <ComponentRef Id="StartMenuShortcut" />
+    <ComponentGroup Id="ProductComponents">
+      <ComponentRef Id="cmpAlertingExe" />
+      <ComponentRef Id="cmpLauncherExe" />
+      <ComponentRef Id="cmpShortcut" />
     </ComponentGroup>
-  </Fragment>
+
+    <Feature Id="MainFeature" Title="Alerting" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+  </Package>
 </Wix>

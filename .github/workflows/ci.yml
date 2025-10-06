@@ -94,3 +94,42 @@ jobs:
         run: cargo install cargo-geiger --locked
       - name: cargo geiger
         run: cargo geiger -q
+
+  windows-msi:
+    runs-on: windows-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 4.*
+
+      - name: Build launcher stub
+        run: |
+          dotnet publish packaging/windows/AppIdLauncher/AlertingLauncher.csproj `
+            -c Release -r win-x64 `
+            -o target/launcher `
+            --self-contained false
+
+      - name: Build Windows release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Build MSI package
+        env:
+          WIX: C:\Users\runneradmin\.dotnet\tools\wix.exe
+        run: |
+          "$env:WIX" build packaging\msi\alerting.wxs `
+            -dAlertingExecutable="${{github.workspace}}\target\x86_64-pc-windows-msvc\release\alerting.exe" `
+            -dAlertingLauncherExecutable="${{github.workspace}}\target\launcher\AlertingLauncher.exe" `
+            -o alerting.msi
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: alerting-msi
+          path: alerting.msi
