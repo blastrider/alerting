@@ -125,10 +125,12 @@ jobs:
           $wix = Join-Path $env:USERPROFILE '.dotnet\tools\wix.exe'
           $alertingExe = Join-Path $env:GITHUB_WORKSPACE 'target\x86_64-pc-windows-msvc\release\alerting.exe'
           $launcherExe = Join-Path $env:GITHUB_WORKSPACE 'target\launcher\AlertingLauncher.exe'
-          & $wix build packaging\msi\alerting.wxs `
-            -d:AlertingExecutable="$alertingExe" `
-            -d:AlertingLauncherExecutable="$launcherExe" `
-            -o alerting.msi
+
+          # <-- Correct usage: pass -d as a separate argument and give Name=Value in the next token
+          & $wix build 'packaging\msi\alerting.wxs' `
+            -d "AlertingExecutable=$alertingExe" `
+            -d "AlertingLauncherExecutable=$launcherExe" `
+            -o 'alerting.msi'
 
       - name: Upload MSI artifact
         uses: actions/upload-artifact@v4
