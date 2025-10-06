@@ -84,6 +84,7 @@ jobs:
       - name: cargo udeps
         run: cargo +nightly udeps --all-targets
 
+<<<<<<< HEAD
   geiger:
     runs-on: ubuntu-latest
     steps:
@@ -94,3 +95,47 @@ jobs:
         run: cargo install cargo-geiger --locked
       - name: cargo geiger
         run: cargo geiger -q
+=======
+  windows-msi:
+    runs-on: windows-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 4.*
+
+      - name: Build launcher stub
+        run: |
+          dotnet publish packaging/windows/AppIdLauncher/AlertingLauncher.csproj `
+            -c Release -r win-x64 `
+            -o target/launcher `
+            --self-contained false
+
+      - name: Build Windows release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Build MSI package
+        shell: pwsh
+        run: |
+          $wix = Join-Path $env:USERPROFILE '.dotnet\tools\wix.exe'
+          $alertingExe = Join-Path $env:GITHUB_WORKSPACE 'target\x86_64-pc-windows-msvc\release\alerting.exe'
+          $launcherExe = Join-Path $env:GITHUB_WORKSPACE 'target\launcher\AlertingLauncher.exe'
+
+          # <-- Correct usage: pass -d as a separate argument and give Name=Value in the next token
+          & $wix build 'packaging\msi\alerting.wxs' `
+            -d "AlertingExecutable=$alertingExe" `
+            -d "AlertingLauncherExecutable=$launcherExe" `
+            -o 'alerting.msi'
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alerting-msi
+          path: alerting.msi
+>>>>>>> feat/hardening-observability-ci

@@ -12,7 +12,12 @@ pub enum AckFilter {
 }
 
 impl AckFilter {
+<<<<<<< HEAD
     pub fn as_str(self) -> &'static str {
+=======
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+>>>>>>> feat/hardening-observability-ci
         match self {
             Self::Acked => "ack",
             Self::Unacked => "unack",
@@ -51,7 +56,12 @@ pub enum Severity {
 }
 
 impl Severity {
+<<<<<<< HEAD
     pub fn from_zabbix(code: i64) -> Option<Self> {
+=======
+    #[must_use]
+    pub const fn from_zabbix(code: i64) -> Option<Self> {
+>>>>>>> feat/hardening-observability-ci
         match code {
             1 => Some(Self::Info),
             2 => Some(Self::Warning),
@@ -62,7 +72,12 @@ impl Severity {
         }
     }
 
+<<<<<<< HEAD
     pub fn as_zabbix_code(self) -> i64 {
+=======
+    #[must_use]
+    pub const fn as_zabbix_code(self) -> i64 {
+>>>>>>> feat/hardening-observability-ci
         match self {
             Self::Info => 1,
             Self::Warning => 2,
@@ -76,11 +91,19 @@ impl Severity {
 impl Display for Severity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+<<<<<<< HEAD
             Severity::Info => "Info",
             Severity::Warning => "Warning",
             Severity::Average => "Average",
             Severity::High => "High",
             Severity::Disaster => "Disaster",
+=======
+            Self::Info => "Info",
+            Self::Warning => "Warning",
+            Self::Average => "Average",
+            Self::High => "High",
+            Self::Disaster => "Disaster",
+>>>>>>> feat/hardening-observability-ci
         })
     }
 }

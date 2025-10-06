@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -64,6 +65,23 @@ struct Cli {
 async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     match run(cli).await {
+=======
+#[path = "alerting/app.rs"]
+mod app;
+#[path = "alerting/cli.rs"]
+mod cli;
+#[path = "alerting/notifier/mod.rs"]
+mod notifier;
+#[path = "alerting/rate_limit.rs"]
+mod rate_limit;
+
+use std::error::Error as StdError;
+
+#[tokio::main]
+async fn main() -> std::process::ExitCode {
+    let cli = cli::Cli::parse_args();
+    match app::run(cli).await {
+>>>>>>> feat/hardening-observability-ci
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
             report_error(&err);
@@ -72,6 +90,7 @@ async fn main() -> std::process::ExitCode {
     }
 }
 
+<<<<<<< HEAD
 async fn run(cli: Cli) -> Result<()> {
     init_tracing(cli.log_filter.as_deref(), cli.json_logs)?;
 
@@ -739,6 +758,9 @@ fn u128_to_u32(value: u128) -> Option<u32> {
 }
 
 fn report_error(err: &AlertError) {
+=======
+fn report_error(err: &alerting::error::Error) {
+>>>>>>> feat/hardening-observability-ci
     eprintln!("Error: {err}");
     let mut source: Option<&dyn StdError> = err.source();
     while let Some(cause) = source {
@@ -746,6 +768,7 @@ fn report_error(err: &AlertError) {
         source = cause.source();
     }
 }
+<<<<<<< HEAD
 
 #[cfg(test)]
 mod tests {
@@ -882,3 +905,5 @@ mod tests {
         assert_eq!(items[0].problem.event_id, "77");
     }
 }
+=======
+>>>>>>> feat/hardening-observability-ci

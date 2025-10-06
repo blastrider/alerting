@@ -2,6 +2,12 @@
 name = "alerting"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
+
+[features]
+default = []
+json-logs = ["tracing-subscriber/json"]
+dev-toast-test = []
 
 [features]
 default = []
@@ -9,10 +15,14 @@ json-logs = ["tracing-subscriber/json"]
 dev-toast-test = []
 
 [dependencies]
+<<<<<<< HEAD
 anyhow = "1.0"
 async-channel = "1.9"
 backoff = { version = "0.4", features = ["tokio"] }
 chrono = { version = "0.4", features = ["clock"] }
+=======
+async-channel = "1.9"
+>>>>>>> feat/hardening-observability-ci
 config = { version = "0.14", default-features = false, features = ["toml"] }
 clap = { version = "4.5", features = ["derive"] }
 humantime = "2.1"
@@ -27,6 +37,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 uuid = { version = "1", features = ["v4", "v7"] }
 url = "2.5"
+<<<<<<< HEAD
+=======
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+>>>>>>> feat/hardening-observability-ci
 
 [dev-dependencies]
 insta = { version = "1.39", features = ["json"] }
@@ -43,10 +57,15 @@ assets = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 notify-rust = "4"
+<<<<<<< HEAD
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+=======
+
+[target.'cfg(target_os = "windows")'.dependencies]
+>>>>>>> feat/hardening-observability-ci
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Com",
@@ -58,14 +77,23 @@ windows = { version = "0.58", features = [
     "Foundation",
     "Foundation_Collections",
 ] }
+<<<<<<< HEAD
 winrt-notification = "0.5"
+=======
+tauri-winrt-notification = "0.7"
+>>>>>>> feat/hardening-observability-ci
 
 [lints.rust]
 unsafe_code = "forbid"
 
 [lints.clippy]
+<<<<<<< HEAD
 pedantic = "warn"
 nursery = "warn"
+=======
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+>>>>>>> feat/hardening-observability-ci
 unwrap_used = "deny"
 expect_used = "deny"
 
