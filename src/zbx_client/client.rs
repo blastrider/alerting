@@ -1,8 +1,6 @@
 use std::fmt::Write as FmtWrite;
 use std::time::{Duration, Instant};
 
-use backoff::ExponentialBackoffBuilder;
-use backoff::backoff::Backoff;
 use reqwest::StatusCode;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use secrecy::{ExposeSecret, SecretString};
@@ -20,6 +18,51 @@ use super::rpc::{RpcEnvelope, RpcRequest, body_preview};
 
 const MAX_ATTEMPTS: usize = 3;
 const CORRELATION_HEADER: &str = "x-correlation-id";
+const INITIAL_BACKOFF: Duration = Duration::from_millis(200);
+const MAX_BACKOFF: Duration = Duration::from_secs(2);
+const BACKOFF_MULTIPLIER: f64 = 2.0;
+
+struct RetryBackoff {
+    current: Duration,
+    elapsed: Duration,
+    max_interval: Duration,
+    max_elapsed: Duration,
+}
+
+impl RetryBackoff {
+    const fn new(max_elapsed: Duration) -> Self {
+        Self {
+            current: INITIAL_BACKOFF,
+            elapsed: Duration::ZERO,
+            max_interval: MAX_BACKOFF,
+            max_elapsed,
+        }
+    }
+
+    fn next_delay(&mut self) -> Option<Duration> {
+        if self.max_elapsed.is_zero() {
+            return None;
+        }
+
+        if self.elapsed >= self.max_elapsed {
+            return None;
+        }
+
+        let delay = self.current;
+        let next_elapsed = self.elapsed.saturating_add(delay);
+        if next_elapsed > self.max_elapsed {
+            return None;
+        }
+
+        self.elapsed = next_elapsed;
+        let next = self
+            .current
+            .mul_f64(BACKOFF_MULTIPLIER)
+            .min(self.max_interval);
+        self.current = next;
+        Some(delay)
+    }
+}
 
 #[derive(Clone)]
 pub struct ZbxClient {
@@ -88,13 +131,7 @@ impl ZbxClient {
     where
         T: DeserializeOwned,
     {
-        let mut backoff = ExponentialBackoffBuilder::new()
-            .with_initial_interval(Duration::from_millis(200))
-            .with_multiplier(2.0)
-            .with_randomization_factor(0.25)
-            .with_max_interval(Duration::from_secs(2))
-            .with_max_elapsed_time(Some(self.timeout))
-            .build();
+        let mut backoff = RetryBackoff::new(self.timeout);
 
         for attempt in 1..=MAX_ATTEMPTS {
             let correlation_id = Uuid::now_v7().to_string();
@@ -122,7 +159,7 @@ impl ZbxClient {
                         }
                         .into());
                     }
-                    if let Some(delay) = backoff.next_backoff() {
+                    if let Some(delay) = backoff.next_delay() {
                         warn!(
                             method,
                             %correlation_id,
@@ -147,7 +184,7 @@ impl ZbxClient {
                     }
                     .into());
                 }
-                if let Some(delay) = backoff.next_backoff() {
+                if let Some(delay) = backoff.next_delay() {
                     warn!(
                         method,
                         %correlation_id,
@@ -176,7 +213,7 @@ impl ZbxClient {
                         }
                         .into());
                     }
-                    if let Some(delay) = backoff.next_backoff() {
+                    if let Some(delay) = backoff.next_delay() {
                         warn!(
                             method,
                             %correlation_id,
@@ -206,7 +243,7 @@ impl ZbxClient {
                         }
                         .into());
                     }
-                    if let Some(delay) = backoff.next_backoff() {
+                    if let Some(delay) = backoff.next_delay() {
                         warn!(
                             method,
                             %correlation_id,

@@ -153,9 +153,11 @@ mod linux {
 #[cfg(target_os = "windows")]
 mod windows {
     use alerting::error::NotifyError;
+    use tauri_winrt_notification::{
+        Duration as WinDuration, LoopableSound, Scenario, Sound, Toast,
+    };
     use windows::UI::Notifications::{NotificationSetting, ToastNotificationManager};
     use windows::core::HSTRING;
-    use winrt_notification::{Duration as WinDuration, LoopableSound, Scenario, Sound, Toast};
 
     use super::super::{AckAction, ToastTimeout, ToastUrgency};
     use super::ToastParams;
