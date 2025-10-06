@@ -4,7 +4,7 @@ use humantime::parse_duration;
 
 use crate::error::ConfigError;
 
-pub(crate) fn env_string(key: &'static str) -> std::result::Result<Option<String>, ConfigError> {
+pub(super) fn env_string(key: &'static str) -> std::result::Result<Option<String>, ConfigError> {
     match std::env::var(key) {
         Ok(value) => Ok(Some(value)),
         Err(std::env::VarError::NotPresent) => Ok(None),
@@ -12,7 +12,7 @@ pub(crate) fn env_string(key: &'static str) -> std::result::Result<Option<String
     }
 }
 
-pub(crate) fn env_parse<T>(key: &'static str) -> std::result::Result<Option<T>, ConfigError>
+pub(super) fn env_parse<T>(key: &'static str) -> std::result::Result<Option<T>, ConfigError>
 where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
@@ -33,11 +33,11 @@ where
     Ok(None)
 }
 
-pub(crate) fn env_bool(key: &'static str) -> std::result::Result<Option<bool>, ConfigError> {
+pub(super) fn env_bool(key: &'static str) -> std::result::Result<Option<bool>, ConfigError> {
     env_parse::<bool>(key)
 }
 
-pub(crate) fn env_duration(
+pub(super) fn env_duration(
     key: &'static str,
 ) -> std::result::Result<Option<Duration>, ConfigError> {
     if let Some(value) = env_string(key)? {

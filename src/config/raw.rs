@@ -10,14 +10,26 @@ use crate::Result;
 use crate::error::ConfigError;
 use crate::types::AckFilter;
 
-use super::defaults::*;
+use super::defaults::{
+    default_ack_filter,
+    default_concurrency,
+    default_dedup_cache_size,
+    default_limit,
+    default_max_notif,
+    default_notify_appname,
+    default_open_label,
+    default_poll_interval,
+    default_queue_bound,
+    default_rate_limit_max,
+    default_rate_limit_window,
+};
 use super::env::{env_bool, env_duration, env_parse, env_string};
 use super::{
     Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_HTTP_TIMEOUT, HumantimeDuration, MAX_NOTIF_BOUNDS,
     NotifySettings, RateLimit,
 };
 
-pub(crate) fn load(path: impl AsRef<Path>) -> std::result::Result<RawConfig, ConfigError> {
+pub(super) fn load(path: impl AsRef<Path>) -> std::result::Result<RawConfig, ConfigError> {
     let mut builder = ::config::Config::builder();
     let path = path.as_ref();
     builder = builder.add_source(::config::File::from(path).required(false));
@@ -36,71 +48,71 @@ pub(crate) fn load(path: impl AsRef<Path>) -> std::result::Result<RawConfig, Con
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawConfig {
+pub(super) struct RawConfig {
     #[serde(default)]
-    pub(crate) zabbix: RawZabbix,
+    pub(super) zabbix: RawZabbix,
     #[serde(default)]
-    pub(crate) notify: RawNotify,
+    pub(super) notify: RawNotify,
     #[serde(default)]
-    pub(crate) app: RawApp,
+    pub(super) app: RawApp,
 }
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawZabbix {
-    pub(crate) url: Option<String>,
-    pub(crate) token: Option<String>,
+pub(super) struct RawZabbix {
+    pub(super) url: Option<String>,
+    pub(super) token: Option<String>,
     #[serde(default = "default_limit")]
-    pub(crate) limit: u32,
+    pub(super) limit: u32,
     #[serde(default = "default_concurrency")]
-    pub(crate) concurrency: usize,
+    pub(super) concurrency: usize,
     #[serde(default)]
-    pub(crate) ack_filter: Option<String>,
+    pub(super) ack_filter: Option<String>,
 }
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawNotify {
+pub(super) struct RawNotify {
     #[serde(default = "default_notify_appname")]
-    pub(crate) appname: String,
+    pub(super) appname: String,
     #[serde(default)]
-    pub(crate) sticky: bool,
+    pub(super) sticky: bool,
     #[serde(default)]
     #[serde_as(as = "Option<HumantimeDuration>")]
-    pub(crate) timeout: Option<Duration>,
+    pub(super) timeout: Option<Duration>,
     #[serde(default)]
-    pub(crate) default_timeout: bool,
+    pub(super) default_timeout: bool,
     #[serde(default)]
-    pub(crate) icon: Option<PathBuf>,
+    pub(super) icon: Option<PathBuf>,
     #[serde(default = "default_open_label")]
-    pub(crate) open_label: String,
+    pub(super) open_label: String,
     #[serde(default)]
-    pub(crate) notify_acked: bool,
+    pub(super) notify_acked: bool,
 }
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawApp {
+pub(super) struct RawApp {
     #[serde(default = "default_max_notif")]
-    pub(crate) max_notif: usize,
+    pub(super) max_notif: usize,
     #[serde(default = "default_queue_bound")]
-    pub(crate) queue_bound: usize,
+    pub(super) queue_bound: usize,
     #[serde(default = "default_dedup_cache_size")]
-    pub(crate) dedup_cache_size: usize,
+    pub(super) dedup_cache_size: usize,
     #[serde(default = "default_rate_limit_max")]
-    pub(crate) rate_limit_max: usize,
+    pub(super) rate_limit_max: usize,
     #[serde(default = "default_rate_limit_window")]
     #[serde_as(as = "HumantimeDuration")]
-    pub(crate) rate_limit_window: Duration,
+    pub(super) rate_limit_window: Duration,
     #[serde(default = "default_poll_interval")]
     #[serde_as(as = "HumantimeDuration")]
-    pub(crate) poll_interval: Duration,
+    pub(super) poll_interval: Duration,
     #[serde(default)]
-    pub(crate) open_url_fmt: Option<String>,
+    pub(super) open_url_fmt: Option<String>,
 }
 
 impl RawConfig {
-    pub(crate) fn apply_env_overrides(&mut self) -> std::result::Result<(), ConfigError> {
+    pub(super) fn apply_env_overrides(&mut self) -> std::result::Result<(), ConfigError> {
         if let Some(url) = env_string("ZBX_URL")? {
             self.zabbix.url = Some(url);
         }
@@ -161,7 +173,7 @@ impl RawConfig {
         Ok(())
     }
 
-    pub(crate) fn validate_and_build(self) -> Result<Config> {
+    pub(super) fn validate_and_build(self) -> Result<Config> {
         let url_str = self.zabbix.url.ok_or(ConfigError::MissingField {
             field: "zabbix.url",
         })?;

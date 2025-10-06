@@ -1,45 +1,45 @@
 use std::time::Duration;
 
-pub(crate) const fn default_limit() -> u32 {
+pub(super) const fn default_limit() -> u32 {
     20
 }
 
-pub(crate) const fn default_concurrency() -> usize {
+pub(super) const fn default_concurrency() -> usize {
     4
 }
 
-pub(crate) fn default_ack_filter() -> String {
+pub(super) fn default_ack_filter() -> String {
     "unacked".to_string()
 }
 
-pub(crate) fn default_notify_appname() -> String {
+pub(super) fn default_notify_appname() -> String {
     "Alerting".to_string()
 }
 
-pub(crate) fn default_open_label() -> String {
+pub(super) fn default_open_label() -> String {
     "Open".to_string()
 }
 
-pub(crate) const fn default_max_notif() -> usize {
+pub(super) const fn default_max_notif() -> usize {
     5
 }
 
-pub(crate) const fn default_queue_bound() -> usize {
+pub(super) const fn default_queue_bound() -> usize {
     64
 }
 
-pub(crate) const fn default_dedup_cache_size() -> usize {
+pub(super) const fn default_dedup_cache_size() -> usize {
     256
 }
 
-pub(crate) const fn default_rate_limit_max() -> usize {
+pub(super) const fn default_rate_limit_max() -> usize {
     3
 }
 
-pub(crate) const fn default_rate_limit_window() -> Duration {
+pub(super) const fn default_rate_limit_window() -> Duration {
     Duration::from_secs(5)
 }
 
-pub(crate) const fn default_poll_interval() -> Duration {
+pub(super) const fn default_poll_interval() -> Duration {
     Duration::from_secs(30)
 }

@@ -56,6 +56,13 @@ pub struct RateLimit {
 }
 
 impl Config {
+    /// Load configuration from a file and the environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configuration file cannot be read, parsed,
+    /// when environment overrides are invalid, or when the resulting values
+    /// fail validation.
     pub fn from_env_and_file(path: impl AsRef<Path>) -> Result<Self> {
         let mut raw = raw::load(path).map_err(AlertError::from)?;
         raw.apply_env_overrides().map_err(AlertError::from)?;
@@ -64,8 +71,9 @@ impl Config {
 }
 
 impl RateLimit {
-    pub fn allows(&self, count: usize, candidate: usize) -> bool {
-        count + 1 <= self.max_events || candidate == 0
+    #[must_use]
+    pub const fn allows(&self, count: usize, candidate: usize) -> bool {
+        candidate == 0 || count < self.max_events
     }
 }
 

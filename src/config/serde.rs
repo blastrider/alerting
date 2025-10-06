@@ -4,7 +4,7 @@ use humantime::{format_duration, parse_duration};
 use serde::Deserialize;
 use serde_with::{DeserializeAs, SerializeAs};
 
-pub(crate) struct HumantimeDuration;
+pub(super) struct HumantimeDuration;
 
 impl<'de> DeserializeAs<'de, Duration> for HumantimeDuration {
     fn deserialize_as<D>(deserializer: D) -> std::result::Result<Duration, D::Error>
@@ -41,7 +41,10 @@ mod tests {
             duration: Option<Duration>,
         }
 
-        let sample: Sample = serde_json::from_str(r#"{"duration":"5s"}"#).unwrap();
+        let sample: Sample = match serde_json::from_str(r#"{"duration":"5s"}"#) {
+            Ok(value) => value,
+            Err(err) => panic!("failed to parse sample json: {err}"),
+        };
         assert_eq!(sample.duration, Some(Duration::from_secs(5)));
     }
 }
