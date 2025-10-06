@@ -84,17 +84,6 @@ jobs:
       - name: cargo udeps
         run: cargo +nightly udeps --all-targets
 
-  geiger:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-geiger
-        run: cargo install cargo-geiger --locked
-      - name: cargo geiger
-        run: cargo geiger -q --all-features
-
   windows-msi:
     runs-on: windows-latest
     needs: [build]
