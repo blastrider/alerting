@@ -144,12 +144,15 @@ fn send_notification(
         open_label: &notify.open_label,
     };
 
-    backends::send_toast(&params, ack_action.as_ref())
-        .map_err(AlertError::from)?;
+    backends::send_toast(&params, ack_action.as_ref()).map_err(AlertError::from)?;
     Ok(())
 }
 
-const fn compute_timeout(sticky: bool, timeout_ms: Option<u32>, default_timeout: bool) -> ToastTimeout {
+const fn compute_timeout(
+    sticky: bool,
+    timeout_ms: Option<u32>,
+    default_timeout: bool,
+) -> ToastTimeout {
     if sticky {
         ToastTimeout::Never
     } else if let Some(ms) = timeout_ms {

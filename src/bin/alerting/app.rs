@@ -329,7 +329,10 @@ mod tests {
 
         let (tx, rx) = bounded::<NotificationItem>(4);
         let cache_size = NonZeroUsize::new(config.dedup_cache_size).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "dedup cache size must be > 0")
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "dedup cache size must be > 0",
+            )
         })?;
         let mut dedup = LruCache::new(cache_size);
         let mut bucket = LeakyBucket::new(10, Duration::from_secs(60));
