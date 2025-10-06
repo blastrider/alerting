@@ -93,7 +93,7 @@ jobs:
       - name: Install cargo-geiger
         run: cargo install cargo-geiger --locked
       - name: cargo geiger
-        run: cargo geiger -q
+        run: cargo geiger -q --all-features
 
   windows-msi:
     runs-on: windows-latest
