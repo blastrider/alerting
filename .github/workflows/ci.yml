@@ -120,12 +120,14 @@ jobs:
         run: cargo build --release --target x86_64-pc-windows-msvc
 
       - name: Build MSI package
-        env:
-          WIX: C:\Users\runneradmin\.dotnet\tools\wix.exe
+        shell: pwsh
         run: |
-          "$env:WIX" build packaging\msi\alerting.wxs `
-            -dAlertingExecutable="${{github.workspace}}\target\x86_64-pc-windows-msvc\release\alerting.exe" `
-            -dAlertingLauncherExecutable="${{github.workspace}}\target\launcher\AlertingLauncher.exe" `
+          $wix = Join-Path $env:USERPROFILE '.dotnet\tools\wix.exe'
+          $alertingExe = Join-Path $env:GITHUB_WORKSPACE 'target\x86_64-pc-windows-msvc\release\alerting.exe'
+          $launcherExe = Join-Path $env:GITHUB_WORKSPACE 'target\launcher\AlertingLauncher.exe'
+          & $wix build packaging\msi\alerting.wxs `
+            -dAlertingExecutable="$alertingExe" `
+            -dAlertingLauncherExecutable="$launcherExe" `
             -o alerting.msi
 
       - name: Upload MSI artifact
