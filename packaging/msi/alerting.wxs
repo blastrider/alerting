@@ -12,7 +12,6 @@
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Alerting is already installed." />
 
-    <!-- Media: Id obligatoire -->
     <Media Id="1" Cabinet="product.cab" EmbedCab="yes" />
 
     <StandardDirectory Id="LocalAppDataFolder">
@@ -22,14 +21,13 @@
         </Component>
 
         <Component Id="cmpLauncherExe" Guid="{A7B9E534-5F16-4F2A-9841-570F7C3B6F32}" Directory="INSTALLFOLDER">
-          <!-- Le Shortcut est enfant du File (pattern recommandé) -->
-          <File Id="AlertingLauncherExe" Source="$(var.AlertingLauncherExecutable)">
+          <File Id="AlertingLauncherExe" Source="$(var.AlertingLauncherExecutable)" KeyPath="yes">
+            <!-- Pas d'attribut Target ici : le Shortcut est automatiquement lié au File parent -->
             <Shortcut
               Id="AlertingShortcut"
               Name="Alerting"
               Directory="ShortcutDir"
-              WorkingDirectory="INSTALLFOLDER"
-              Target="[#AlertingLauncherExe]" />
+              WorkingDirectory="INSTALLFOLDER" />
           </File>
         </Component>
       </Directory>
@@ -39,7 +37,6 @@
       <Directory Id="ShortcutDir" Name="Alerting" />
     </StandardDirectory>
 
-    <!-- RegistryKey for install tracking (kept in a component placed in INSTALLFOLDER) -->
     <Component Id="cmpInstallerReg" Guid="{D9B6A2E1-1234-4F88-9B1A-ABCDEF123456}" Directory="INSTALLFOLDER">
       <RegistryValue
           Root="HKCU"
