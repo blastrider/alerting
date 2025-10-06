@@ -1,191 +1,106 @@
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Duration;
 
-use humantime::{format_duration, parse_duration};
-use secrecy::SecretString;
 use serde::Deserialize;
-use serde_with::{DeserializeAs, SerializeAs, serde_as};
-use std::str::FromStr;
+use serde_with::serde_as;
 use url::Url;
 
 use crate::Result;
 use crate::error::ConfigError;
 use crate::types::AckFilter;
 
-const MAX_NOTIF_BOUNDS: std::ops::RangeInclusive<usize> = 1..=100;
-const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+use super::defaults::*;
+use super::env::{env_bool, env_duration, env_parse, env_string};
+use super::{
+    Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_HTTP_TIMEOUT, HumantimeDuration, MAX_NOTIF_BOUNDS,
+    NotifySettings, RateLimit,
+};
 
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub base_url: Url,
-    pub token: SecretString,
-    pub limit: u32,
-    pub concurrency: usize,
-    pub ack_filter: AckFilter,
-    pub max_notif: usize,
-    pub queue_capacity: usize,
-    pub dedup_cache_size: usize,
-    pub rate_limit: RateLimit,
-    pub poll_interval: Duration,
-    pub open_url_fmt: Option<String>,
-    pub notify: NotifySettings,
-    pub http_connect_timeout: Duration,
-    pub http_request_timeout: Duration,
-}
+pub(crate) fn load(path: impl AsRef<Path>) -> std::result::Result<RawConfig, ConfigError> {
+    let mut builder = ::config::Config::builder();
+    let path = path.as_ref();
+    builder = builder.add_source(::config::File::from(path).required(false));
+    builder = builder.add_source(
+        ::config::Environment::with_prefix("ALERTING")
+            .separator("__")
+            .try_parsing(true),
+    );
 
-#[derive(Debug, Clone)]
-pub struct NotifySettings {
-    pub appname: String,
-    pub sticky: bool,
-    pub timeout: Option<Duration>,
-    pub default_timeout: bool,
-    pub icon: Option<PathBuf>,
-    pub open_label: String,
-    pub notify_acked: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct RateLimit {
-    pub max_events: usize,
-    pub per: Duration,
-}
-
-impl Config {
-    pub fn from_env_and_file(path: impl AsRef<Path>) -> Result<Self> {
-        let mut builder = ::config::Config::builder();
-        let path = path.as_ref();
-        builder = builder.add_source(::config::File::from(path).required(false));
-        builder = builder.add_source(
-            ::config::Environment::with_prefix("ALERTING")
-                .separator("__")
-                .try_parsing(true),
-        );
-
-        let mut raw: RawConfig = builder
-            .build()
-            .map_err(|err| ConfigError::Other(err.to_string()))?
-            .try_deserialize()
-            .map_err(|err| ConfigError::Parse(err.to_string()))?;
-
-        raw.apply_env_overrides()?;
-        raw.validate_and_build()
-    }
-}
-
-impl RateLimit {
-    pub fn allows(&self, count: usize, candidate: usize) -> bool {
-        count + 1 <= self.max_events || candidate == 0
-    }
+    builder
+        .build()
+        .map_err(|err| ConfigError::Other(err.to_string()))?
+        .try_deserialize()
+        .map_err(|err| ConfigError::Parse(err.to_string()))
 }
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
-struct RawConfig {
+pub(crate) struct RawConfig {
     #[serde(default)]
-    zabbix: RawZabbix,
+    pub(crate) zabbix: RawZabbix,
     #[serde(default)]
-    notify: RawNotify,
+    pub(crate) notify: RawNotify,
     #[serde(default)]
-    app: RawApp,
+    pub(crate) app: RawApp,
 }
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
-struct RawZabbix {
-    url: Option<String>,
-    token: Option<String>,
+pub(crate) struct RawZabbix {
+    pub(crate) url: Option<String>,
+    pub(crate) token: Option<String>,
     #[serde(default = "default_limit")]
-    limit: u32,
+    pub(crate) limit: u32,
     #[serde(default = "default_concurrency")]
-    concurrency: usize,
+    pub(crate) concurrency: usize,
     #[serde(default)]
-    ack_filter: Option<String>,
+    pub(crate) ack_filter: Option<String>,
 }
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
-struct RawNotify {
+pub(crate) struct RawNotify {
     #[serde(default = "default_notify_appname")]
-    appname: String,
+    pub(crate) appname: String,
     #[serde(default)]
-    sticky: bool,
+    pub(crate) sticky: bool,
     #[serde(default)]
     #[serde_as(as = "Option<HumantimeDuration>")]
-    timeout: Option<Duration>,
+    pub(crate) timeout: Option<Duration>,
     #[serde(default)]
-    default_timeout: bool,
+    pub(crate) default_timeout: bool,
     #[serde(default)]
-    icon: Option<PathBuf>,
+    pub(crate) icon: Option<PathBuf>,
     #[serde(default = "default_open_label")]
-    open_label: String,
+    pub(crate) open_label: String,
     #[serde(default)]
-    notify_acked: bool,
+    pub(crate) notify_acked: bool,
 }
 
 #[serde_as]
 #[derive(Debug, Deserialize)]
-struct RawApp {
+pub(crate) struct RawApp {
     #[serde(default = "default_max_notif")]
-    max_notif: usize,
+    pub(crate) max_notif: usize,
     #[serde(default = "default_queue_bound")]
-    queue_bound: usize,
+    pub(crate) queue_bound: usize,
     #[serde(default = "default_dedup_cache_size")]
-    dedup_cache_size: usize,
+    pub(crate) dedup_cache_size: usize,
     #[serde(default = "default_rate_limit_max")]
-    rate_limit_max: usize,
+    pub(crate) rate_limit_max: usize,
     #[serde(default = "default_rate_limit_window")]
     #[serde_as(as = "HumantimeDuration")]
-    rate_limit_window: Duration,
+    pub(crate) rate_limit_window: Duration,
     #[serde(default = "default_poll_interval")]
     #[serde_as(as = "HumantimeDuration")]
-    poll_interval: Duration,
+    pub(crate) poll_interval: Duration,
     #[serde(default)]
-    open_url_fmt: Option<String>,
-}
-
-impl Default for RawZabbix {
-    fn default() -> Self {
-        Self {
-            url: None,
-            token: None,
-            limit: default_limit(),
-            concurrency: default_concurrency(),
-            ack_filter: Some(default_ack_filter()),
-        }
-    }
-}
-
-impl Default for RawNotify {
-    fn default() -> Self {
-        Self {
-            appname: default_notify_appname(),
-            sticky: false,
-            timeout: None,
-            default_timeout: false,
-            icon: None,
-            open_label: default_open_label(),
-            notify_acked: false,
-        }
-    }
-}
-
-impl Default for RawApp {
-    fn default() -> Self {
-        Self {
-            max_notif: default_max_notif(),
-            queue_bound: default_queue_bound(),
-            dedup_cache_size: default_dedup_cache_size(),
-            rate_limit_max: default_rate_limit_max(),
-            rate_limit_window: default_rate_limit_window(),
-            poll_interval: default_poll_interval(),
-            open_url_fmt: None,
-        }
-    }
+    pub(crate) open_url_fmt: Option<String>,
 }
 
 impl RawConfig {
-    fn apply_env_overrides(&mut self) -> std::result::Result<(), ConfigError> {
+    pub(crate) fn apply_env_overrides(&mut self) -> std::result::Result<(), ConfigError> {
         if let Some(url) = env_string("ZBX_URL")? {
             self.zabbix.url = Some(url);
         }
@@ -246,7 +161,7 @@ impl RawConfig {
         Ok(())
     }
 
-    fn validate_and_build(self) -> Result<Config> {
+    pub(crate) fn validate_and_build(self) -> Result<Config> {
         let url_str = self.zabbix.url.ok_or(ConfigError::MissingField {
             field: "zabbix.url",
         })?;
@@ -351,136 +266,42 @@ impl RawConfig {
     }
 }
 
-struct HumantimeDuration;
-
-impl<'de> DeserializeAs<'de, Duration> for HumantimeDuration {
-    fn deserialize_as<D>(deserializer: D) -> std::result::Result<Duration, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = String::deserialize(deserializer)?;
-        parse_duration(&raw).map_err(serde::de::Error::custom)
-    }
-}
-
-impl SerializeAs<Duration> for HumantimeDuration {
-    fn serialize_as<S>(value: &Duration, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&format_duration(*value).to_string())
-    }
-}
-
-fn env_string(key: &'static str) -> std::result::Result<Option<String>, ConfigError> {
-    match std::env::var(key) {
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(err) => Err(ConfigError::Other(err.to_string())),
-    }
-}
-
-fn env_parse<T>(key: &'static str) -> std::result::Result<Option<T>, ConfigError>
-where
-    T: std::str::FromStr,
-    T::Err: std::fmt::Display,
-{
-    if let Some(value) = env_string(key)? {
-        if value.trim().is_empty() {
-            return Ok(None);
+impl Default for RawZabbix {
+    fn default() -> Self {
+        Self {
+            url: None,
+            token: None,
+            limit: default_limit(),
+            concurrency: default_concurrency(),
+            ack_filter: Some(default_ack_filter()),
         }
-        return value
-            .trim()
-            .parse::<T>()
-            .map(Some)
-            .map_err(|err| ConfigError::InvalidField {
-                field: key,
-                message: err.to_string(),
-            });
     }
-    Ok(None)
 }
 
-fn env_bool(key: &'static str) -> std::result::Result<Option<bool>, ConfigError> {
-    env_parse::<bool>(key)
-}
-
-fn env_duration(key: &'static str) -> std::result::Result<Option<Duration>, ConfigError> {
-    if let Some(value) = env_string(key)? {
-        if value.trim().is_empty() {
-            return Ok(None);
+impl Default for RawNotify {
+    fn default() -> Self {
+        Self {
+            appname: default_notify_appname(),
+            sticky: false,
+            timeout: None,
+            default_timeout: false,
+            icon: None,
+            open_label: default_open_label(),
+            notify_acked: false,
         }
-        return parse_duration(value.trim())
-            .map(Some)
-            .map_err(|err| ConfigError::InvalidField {
-                field: key,
-                message: err.to_string(),
-            });
     }
-    Ok(None)
 }
 
-const fn default_limit() -> u32 {
-    20
-}
-
-const fn default_concurrency() -> usize {
-    4
-}
-
-fn default_ack_filter() -> String {
-    "unacked".to_string()
-}
-
-fn default_notify_appname() -> String {
-    "Alerting".to_string()
-}
-
-fn default_open_label() -> String {
-    "Open".to_string()
-}
-
-const fn default_max_notif() -> usize {
-    5
-}
-
-const fn default_queue_bound() -> usize {
-    64
-}
-
-const fn default_dedup_cache_size() -> usize {
-    256
-}
-
-const fn default_rate_limit_max() -> usize {
-    3
-}
-
-const fn default_rate_limit_window() -> Duration {
-    Duration::from_secs(5)
-}
-
-const fn default_poll_interval() -> Duration {
-    Duration::from_secs(30)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::HumantimeDuration;
-    use serde::Deserialize;
-    use serde_with::serde_as;
-    use std::time::Duration;
-
-    #[test]
-    fn humantime_duration_parses_strings() {
-        #[serde_as]
-        #[derive(Deserialize)]
-        struct Sample {
-            #[serde_as(as = "Option<HumantimeDuration>")]
-            duration: Option<Duration>,
+impl Default for RawApp {
+    fn default() -> Self {
+        Self {
+            max_notif: default_max_notif(),
+            queue_bound: default_queue_bound(),
+            dedup_cache_size: default_dedup_cache_size(),
+            rate_limit_max: default_rate_limit_max(),
+            rate_limit_window: default_rate_limit_window(),
+            poll_interval: default_poll_interval(),
+            open_url_fmt: None,
         }
-
-        let sample: Sample = serde_json::from_str(r#"{"duration":"5s"}"#).unwrap();
-        assert_eq!(sample.duration, Some(Duration::from_secs(5)));
     }
 }
