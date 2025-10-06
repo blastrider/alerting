@@ -9,13 +9,16 @@
       UpgradeCode="{6D4F9B52-1AA1-4F9C-8AA2-B23D1562A21E}">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" />
 
-    <MajorUpgrade AllowDowngrades="no" Schedule="afterInstallInitialize" />
+    <MajorUpgrade AllowDowngrades="no" />
 
-    <MediaTemplate />
+    <MediaTemplate EmbedCab="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
         <Directory Id="INSTALLFOLDER" Name="Alerting" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AlertingProgramMenu" Name="Alerting" />
       </Directory>
     </Directory>
 
@@ -25,10 +28,22 @@
   </Product>
 
   <Fragment>
-    <ComponentGroup Id="AlertingComponents">
+    <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="AlertingBinary" Guid="{8A9531A4-6D82-4F13-861D-0F8DC8D302FD}">
         <File Id="AlertingExe" Source="$(var.AlertingExecutable)" KeyPath="yes" />
       </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="AlertingProgramMenu">
+      <Component Id="StartMenuShortcut" Guid="{C0C072E7-8B46-4BDB-ADFB-99F36F7640F5}">
+        <Shortcut Id="AlertingStartMenuShortcut" Name="Alerting" Target="[INSTALLFOLDER]alerting.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\\Alerting" Name="StartMenuShortcut" Type="string" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <ComponentGroup Id="AlertingComponents">
+      <ComponentRef Id="AlertingBinary" />
+      <ComponentRef Id="StartMenuShortcut" />
     </ComponentGroup>
   </Fragment>
 </Wix>
