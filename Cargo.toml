@@ -2,6 +2,7 @@
 name = "alerting"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
 
 [features]
 default = []
@@ -9,9 +10,7 @@ json-logs = ["tracing-subscriber/json"]
 dev-toast-test = []
 
 [dependencies]
-anyhow = "1.0"
 async-channel = "1.9"
-chrono = { version = "0.4", features = ["clock"] }
 config = { version = "0.14", default-features = false, features = ["toml"] }
 clap = { version = "4.5", features = ["derive"] }
 humantime = "2.1"
@@ -26,6 +25,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 uuid = { version = "1", features = ["v4", "v7"] }
 url = "2.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 
 [dev-dependencies]
 insta = { version = "1.39", features = ["json"] }
@@ -42,10 +42,8 @@ assets = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 notify-rust = "4"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Com",
