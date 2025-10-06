@@ -4,6 +4,7 @@ use std::time::Duration;
 use clap::{ArgAction, Parser};
 use humantime::parse_duration;
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Alerting bridge for Zabbix", long_about = None)]
 pub struct Cli {

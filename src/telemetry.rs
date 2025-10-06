@@ -4,6 +4,12 @@ use crate::Result;
 use crate::error::Error;
 
 /// Initialise tracing avec un filtre optionnel et un mode JSON conditionnel.
+///
+/// # Errors
+///
+/// Retourne une erreur si le filtre fourni est invalide, si la couche JSON est
+/// demandée alors que la fonctionnalité n'est pas compilée, ou si l'installation
+/// du subscriber global échoue.
 pub fn init_tracing(explicit_filter: Option<&str>, use_json: bool) -> Result<()> {
     let mut filter_candidates = Vec::new();
     if let Some(f) = explicit_filter {
@@ -16,7 +22,7 @@ pub fn init_tracing(explicit_filter: Option<&str>, use_json: bool) -> Result<()>
 
     let filter = filter_candidates
         .into_iter()
-        .find_map(|candidate| EnvFilter::try_new(candidate.clone()).ok())
+        .find_map(|candidate| EnvFilter::try_new(candidate).ok())
         .ok_or_else(|| Error::Telemetry("invalid log filter".to_string()))?;
 
     #[cfg(feature = "json-logs")]

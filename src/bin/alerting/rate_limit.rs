@@ -52,7 +52,7 @@ mod tests {
         let now = Instant::now();
         assert!(bucket.try_acquire(now));
         assert!(!bucket.try_acquire(now));
-        let later = now.checked_add(Duration::from_secs(2)).unwrap();
+        let later = now + Duration::from_secs(2);
         assert!(bucket.try_acquire(later));
     }
 }

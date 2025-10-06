@@ -1,3 +1,4 @@
+use std::fmt::Write as FmtWrite;
 use std::time::{Duration, Instant};
 
 use backoff::ExponentialBackoffBuilder;
@@ -29,6 +30,12 @@ pub struct ZbxClient {
 }
 
 impl ZbxClient {
+    /// Build a `ZbxClient` configured with the supplied parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the base URL is invalid, if HTTPS is required but
+    /// the URL uses HTTP, or if the underlying HTTP client fails to build.
     pub fn new(
         base: Url,
         token: SecretString,
@@ -76,6 +83,7 @@ impl ZbxClient {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) async fn call<T>(&self, method: &str, params: Value) -> Result<T>
     where
         T: DeserializeOwned,
@@ -119,7 +127,7 @@ impl ZbxClient {
                             method,
                             %correlation_id,
                             attempt,
-                            delay_ms = delay.as_millis() as u64,
+                            delay_ms = delay.as_millis(),
                             error = %zerr,
                             "retrying after transport error"
                         );
@@ -144,7 +152,7 @@ impl ZbxClient {
                         method,
                         %correlation_id,
                         attempt,
-                        delay_ms = delay.as_millis() as u64,
+                        delay_ms = delay.as_millis(),
                         status = %status,
                         "retrying after server error"
                     );
@@ -173,7 +181,7 @@ impl ZbxClient {
                             method,
                             %correlation_id,
                             attempt,
-                            delay_ms = delay.as_millis() as u64,
+                            delay_ms = delay.as_millis(),
                             error = %zerr,
                             "retrying after body read error"
                         );
@@ -188,11 +196,10 @@ impl ZbxClient {
                 Ok(env) => env,
                 Err(err) => {
                     let preview = body_preview(&body);
-                    let zerr = ZbxError::Json {
-                        message: format!(
-                            "error decoding response body: {err}; body preview: {preview}"
-                        ),
-                    };
+                    let mut message =
+                        format!("error decoding response body: {err}; body preview: ");
+                    let _ = FmtWrite::write_str(&mut message, &preview);
+                    let zerr = ZbxError::Json { message };
                     if attempt == MAX_ATTEMPTS {
                         return Err(ZbxError::RetryExhausted {
                             source: Box::new(zerr),
@@ -204,7 +211,7 @@ impl ZbxClient {
                             method,
                             %correlation_id,
                             attempt,
-                            delay_ms = delay.as_millis() as u64,
+                            delay_ms = delay.as_millis(),
                             error = %zerr,
                             "retrying after JSON decode error"
                         );
@@ -218,7 +225,7 @@ impl ZbxClient {
             if let Some(err) = envelope.error {
                 let mut message = err.message;
                 if let Some(data) = err.data {
-                    message.push_str(&format!(" – {data}"));
+                    let _ = FmtWrite::write_fmt(&mut message, format_args!(" – {data}"));
                 }
                 return Err(ZbxError::Api {
                     code: err.code,
@@ -232,7 +239,7 @@ impl ZbxClient {
                     method,
                     %correlation_id,
                     attempt,
-                    latency_ms = started.elapsed().as_millis() as u64,
+                    latency_ms = started.elapsed().as_millis(),
                     "zabbix call succeeded"
                 );
                 return Ok(result);

@@ -77,22 +77,23 @@ pub enum NotifyError {
 
 impl From<reqwest::Error> for ZbxError {
     fn from(source: reqwest::Error) -> Self {
-        if source.is_status() {
-            if let Some(status) = source.status() {
-                return Self::HttpStatus { status };
-            }
+        if source.is_status()
+            && let Some(status) = source.status()
+        {
+            return Self::HttpStatus { status };
         }
         Self::Request { source }
     }
 }
 
 impl Error {
-    pub fn is_retriable(&self) -> bool {
+    #[must_use]
+    pub const fn is_retriable(&self) -> bool {
         matches!(
             self,
-            Self::Zabbix(ZbxError::Request { .. })
-                | Self::Zabbix(ZbxError::HttpStatus { .. })
-                | Self::Zabbix(ZbxError::Json { .. })
+            Self::Zabbix(
+                ZbxError::Request { .. } | ZbxError::HttpStatus { .. } | ZbxError::Json { .. }
+            )
         )
     }
 }

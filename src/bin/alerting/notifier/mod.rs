@@ -6,12 +6,15 @@ use alerting::error::Error as AlertError;
 use alerting::types::Severity;
 use alerting::zbx_client::{HostMeta, Problem, ZbxClient};
 use async_channel::Receiver;
+use std::convert::TryFrom;
 #[cfg(target_os = "windows")]
 use std::path::Path;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 
-pub(crate) async fn run_notifier(
+use backends::ToastParams;
+
+pub async fn run_notifier(
     rx: Receiver<NotificationItem>,
     notify: NotifySettings,
     client: ZbxClient,
@@ -21,7 +24,7 @@ pub(crate) async fn run_notifier(
         if dry_run {
             info!(
                 event_id = %item.problem.event_id,
-                host = item.host.as_ref().map(|h| h.display_name.as_str()).unwrap_or("<unknown>"),
+                host = item.host.as_ref().map_or("<unknown>", |h| h.display_name.as_str()),
                 severity = ?item.problem.severity,
                 "dry-run: would emit notification"
             );
@@ -34,14 +37,14 @@ pub(crate) async fn run_notifier(
     }
 }
 
-pub(crate) struct NotificationItem {
+pub struct NotificationItem {
     pub(crate) problem: Problem,
     pub(crate) host: Option<HostMeta>,
     pub(crate) open_url: Option<String>,
 }
 
 #[derive(Clone)]
-pub(crate) struct AckAction {
+struct AckAction {
     client: ZbxClient,
     event_id: String,
 }
@@ -55,7 +58,7 @@ impl AckAction {
     }
 
     pub(crate) fn spawn_with_message(self, message: Option<String>) -> JoinHandle<()> {
-        let AckAction { client, event_id } = self;
+        let Self { client, event_id } = self;
         tokio::spawn(async move {
             match client.ack_event(&event_id, message.clone()).await {
                 Ok(()) => {
@@ -66,7 +69,7 @@ impl AckAction {
                     }
                 }
                 Err(err) => {
-                    tracing::warn!(%event_id, error = %err, "failed to acknowledge event from toast")
+                    tracing::warn!(%event_id, error = %err, "failed to acknowledge event from toast");
                 }
             }
         })
@@ -74,14 +77,14 @@ impl AckAction {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum ToastUrgency {
+enum ToastUrgency {
     Low,
     Normal,
     Critical,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum ToastTimeout {
+enum ToastTimeout {
     Default,
     Never,
     Milliseconds(u32),
@@ -105,8 +108,7 @@ fn send_notification(
     let host_label = item
         .host
         .as_ref()
-        .map(|h| h.display_name.as_str())
-        .unwrap_or("<unknown>");
+        .map_or("<unknown>", |h| h.display_name.as_str());
 
     let summary = format!("{severity:?} – {host_label}");
     let body = format!(
@@ -131,22 +133,23 @@ fn send_notification(
     #[cfg(not(target_os = "linux"))]
     let ack_action = None;
 
-    backends::send_toast(
-        &summary,
-        &body,
+    let params = ToastParams {
+        summary: &summary,
+        body: &body,
         urgency,
         timeout,
-        &notify.appname,
-        notify.icon.as_deref(),
-        open_url.as_deref(),
-        &notify.open_label,
-        ack_action,
-    )
-    .map_err(AlertError::from)?;
+        appname: &notify.appname,
+        icon: notify.icon.as_deref(),
+        open_url: open_url.as_deref(),
+        open_label: &notify.open_label,
+    };
+
+    backends::send_toast(&params, ack_action.as_ref())
+        .map_err(AlertError::from)?;
     Ok(())
 }
 
-fn compute_timeout(sticky: bool, timeout_ms: Option<u32>, default_timeout: bool) -> ToastTimeout {
+const fn compute_timeout(sticky: bool, timeout_ms: Option<u32>, default_timeout: bool) -> ToastTimeout {
     if sticky {
         ToastTimeout::Never
     } else if let Some(ms) = timeout_ms {
@@ -159,33 +162,29 @@ fn compute_timeout(sticky: bool, timeout_ms: Option<u32>, default_timeout: bool)
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn send_test_toast(
+pub fn send_test_toast(
     summary: &str,
     body: &str,
     appname: &str,
     icon: Option<&Path>,
     open_label: &str,
 ) -> Result<()> {
-    backends::send_toast(
+    let params = ToastParams {
         summary,
         body,
-        ToastUrgency::Normal,
-        ToastTimeout::Milliseconds(5_000),
+        urgency: ToastUrgency::Normal,
+        timeout: ToastTimeout::Milliseconds(5_000),
         appname,
         icon,
-        None,
+        open_url: None,
         open_label,
-        None,
-    )
-    .map_err(AlertError::from)
+    };
+
+    backends::send_toast(&params, None).map_err(AlertError::from)
 }
 
 fn u128_to_u32(value: u128) -> Option<u32> {
-    if value > u32::MAX as u128 {
-        None
-    } else {
-        Some(value as u32)
-    }
+    u32::try_from(value).ok()
 }
 
 #[cfg(test)]

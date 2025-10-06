@@ -4,7 +4,7 @@ use humantime::{format_duration, parse_duration};
 use serde::Deserialize;
 use serde_with::{DeserializeAs, SerializeAs};
 
-pub(super) struct HumantimeDuration;
+pub struct HumantimeDuration;
 
 impl<'de> DeserializeAs<'de, Duration> for HumantimeDuration {
     fn deserialize_as<D>(deserializer: D) -> std::result::Result<Duration, D::Error>

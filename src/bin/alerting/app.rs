@@ -72,9 +72,9 @@ pub async fn run(cli: Cli) -> Result<()> {
         cli.dry_run,
     ));
 
-    let mut dedup = LruCache::new(
-        NonZeroUsize::new(config.dedup_cache_size).expect("dedup cache size validated to be > 0"),
-    );
+    let dedup_capacity = NonZeroUsize::new(config.dedup_cache_size)
+        .unwrap_or_else(|| unreachable!("dedup cache size validated to be > 0"));
+    let mut dedup = LruCache::new(dedup_capacity);
     let mut bucket = LeakyBucket::new(config.rate_limit.max_events, config.rate_limit.per);
 
     loop {
@@ -109,7 +109,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 info!("shutdown signal received, stopping loop");
                 break;
             }
-            _ = sleep(sleep_dur) => {}
+            () = sleep(sleep_dur) => {}
         }
     }
 
@@ -121,7 +121,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn poll_once(
+async fn poll_once(
     client: &ZbxClient,
     config: &Config,
     dedup: &mut LruCache<(String, i64), ()>,
@@ -138,8 +138,8 @@ pub(super) async fn poll_once(
     let mut rows: Vec<_> = problems.into_iter().zip(hosts.into_iter()).collect();
 
     rows.sort_unstable_by(|(a, _), (b, _)| {
-        (a.acknowledged as u8)
-            .cmp(&(b.acknowledged as u8))
+        u8::from(a.acknowledged)
+            .cmp(&u8::from(b.acknowledged))
             .then(b.severity.cmp(&a.severity))
             .then(b.clock.cmp(&a.clock))
     });
@@ -168,8 +168,7 @@ pub(super) async fn poll_once(
         let latency = compute_latency_ms(problem.clock);
         let host_label = host
             .as_ref()
-            .map(|h| h.display_name.as_str())
-            .unwrap_or("<unknown>");
+            .map_or("<unknown>", |h| h.display_name.as_str());
 
         info!(
             event_id = %problem.event_id,
@@ -210,7 +209,8 @@ fn compute_latency_ms(clock: i64) -> Option<u128> {
     if clock < 0 {
         return None;
     }
-    let event_time = UNIX_EPOCH.checked_add(Duration::from_secs(clock as u64))?;
+    let seconds = u64::try_from(clock).ok()?;
+    let event_time = UNIX_EPOCH.checked_add(Duration::from_secs(seconds))?;
     SystemTime::now()
         .duration_since(event_time)
         .ok()
@@ -243,7 +243,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
-    async fn poll_once_skips_duplicate_events() {
+    async fn poll_once_skips_duplicate_events() -> Result<(), Box<dyn std::error::Error>> {
         let server = MockServer::start().await;
 
         Mock::given(method("POST"))
@@ -289,8 +289,10 @@ mod tests {
             .mount(&server)
             .await;
 
+        let base_url = Url::parse(&server.uri())?;
+
         let config = Config {
-            base_url: Url::parse(&server.uri()).unwrap(),
+            base_url,
             token: SecretString::from("token"),
             limit: 10,
             concurrency: 2,
@@ -323,16 +325,16 @@ mod tests {
             config.http_request_timeout,
             config.http_connect_timeout,
             true,
-        )
-        .unwrap();
+        )?;
 
         let (tx, rx) = bounded::<NotificationItem>(4);
-        let mut dedup = LruCache::new(NonZeroUsize::new(config.dedup_cache_size).unwrap());
+        let cache_size = NonZeroUsize::new(config.dedup_cache_size).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "dedup cache size must be > 0")
+        })?;
+        let mut dedup = LruCache::new(cache_size);
         let mut bucket = LeakyBucket::new(10, Duration::from_secs(60));
 
-        poll_once(&client, &config, &mut dedup, &mut bucket, &tx)
-            .await
-            .unwrap();
+        poll_once(&client, &config, &mut dedup, &mut bucket, &tx).await?;
 
         tx.close();
         let mut items = Vec::new();
@@ -341,5 +343,6 @@ mod tests {
         }
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].problem.event_id, "77");
+        Ok(())
     }
 }

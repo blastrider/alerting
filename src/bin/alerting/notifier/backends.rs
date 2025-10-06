@@ -1,48 +1,41 @@
+use std::path::Path;
+
 use alerting::error::NotifyError;
 
 use super::{AckAction, ToastTimeout, ToastUrgency};
 
+pub(super) struct ToastParams<'a> {
+    pub summary: &'a str,
+    pub body: &'a str,
+    pub urgency: ToastUrgency,
+    pub timeout: ToastTimeout,
+    pub appname: &'a str,
+    pub icon: Option<&'a Path>,
+    pub open_url: Option<&'a str>,
+    pub open_label: &'a str,
+}
+
 #[cfg(target_os = "linux")]
-pub(crate) fn send_toast(
-    summary: &str,
-    body: &str,
-    urgency: ToastUrgency,
-    timeout: ToastTimeout,
-    appname: &str,
-    icon: Option<&std::path::Path>,
-    open_url: Option<&str>,
-    open_label: &str,
-    ack_action: Option<AckAction>,
+pub(super) fn send_toast(
+    params: &ToastParams<'_>,
+    ack_action: Option<&AckAction>,
 ) -> std::result::Result<(), NotifyError> {
-    linux::send_toast(
-        summary, body, urgency, timeout, appname, icon, open_url, open_label, ack_action,
-    )
+    linux::send_toast(params, ack_action)
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn send_toast(
-    summary: &str,
-    body: &str,
-    urgency: ToastUrgency,
-    timeout: ToastTimeout,
-    appname: &str,
-    icon: Option<&std::path::Path>,
-    open_url: Option<&str>,
-    open_label: &str,
-    ack_action: Option<AckAction>,
+pub(super) fn send_toast(
+    params: &ToastParams<'_>,
+    ack_action: Option<&AckAction>,
 ) -> std::result::Result<(), NotifyError> {
     #[cfg(target_os = "windows")]
     {
-        return windows::send_toast(
-            summary, body, urgency, timeout, appname, icon, open_url, open_label, ack_action,
-        );
+        return windows::send_toast(params, ack_action);
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
-        let _ = (
-            summary, body, urgency, timeout, appname, icon, open_url, open_label, ack_action,
-        );
+        let _ = (params, ack_action);
         Err(NotifyError::Backend)
     }
 }
@@ -51,53 +44,46 @@ pub(crate) fn send_toast(
 mod linux {
     use alerting::error::NotifyError;
     use notify_rust::{Notification, Timeout as LibTimeout, Urgency as LibUrgency};
-    use std::path::Path;
     use std::process::{Command, Stdio};
     use tracing::trace;
 
     use super::super::{AckAction, ToastTimeout, ToastUrgency};
+    use super::ToastParams;
+
+    const ACK_KEY: &str = "ack";
+    const OPEN_KEY: &str = "open";
+    const DISMISS_KEY: &str = "dismiss";
+    const ACK_LABEL: &str = "Acquitter";
 
     pub fn send_toast(
-        summary: &str,
-        body: &str,
-        urgency: ToastUrgency,
-        timeout: ToastTimeout,
-        appname: &str,
-        icon: Option<&Path>,
-        open_url: Option<&str>,
-        open_label: &str,
-        ack_action: Option<AckAction>,
+        params: &ToastParams<'_>,
+        ack_action: Option<&AckAction>,
     ) -> std::result::Result<(), NotifyError> {
         let mut builder = Notification::new();
         builder
-            .summary(summary)
-            .body(body)
-            .appname(appname)
-            .urgency(map_urgency(urgency))
-            .timeout(map_timeout(timeout));
+            .summary(params.summary)
+            .body(params.body)
+            .appname(params.appname)
+            .urgency(map_urgency(params.urgency))
+            .timeout(map_timeout(params.timeout));
 
-        if let Some(icon_path) = icon {
+        if let Some(icon_path) = params.icon {
             builder.icon(&icon_path.to_string_lossy());
         }
-
-        const ACK_KEY: &str = "ack";
-        const OPEN_KEY: &str = "open";
-        const DISMISS_KEY: &str = "dismiss";
-        const ACK_LABEL: &str = "Acquitter";
 
         if ack_action.is_some() {
             builder.action(ACK_KEY, ACK_LABEL);
         }
 
-        if open_url.is_some() {
-            builder.action(OPEN_KEY, open_label);
+        if params.open_url.is_some() {
+            builder.action(OPEN_KEY, params.open_label);
         }
 
         builder.action(DISMISS_KEY, "Ignorer");
 
         let handle = builder.show().map_err(|_| NotifyError::Backend)?;
-        let open = open_url.map(|url| url.to_string());
-        let ack = ack_action.clone();
+        let open = params.open_url.map(str::to_string);
+        let mut ack = ack_action.cloned();
 
         handle.wait_for_action(move |action| match action {
             OPEN_KEY => {
@@ -111,7 +97,7 @@ mod linux {
                 }
             }
             ACK_KEY => {
-                if let Some(ack_action) = ack.clone() {
+                if let Some(ack_action) = ack.take() {
                     trace!("ack action triggered from toast");
                     let message = prompt_ack_message();
                     ack_action.spawn_with_message(message);
@@ -122,7 +108,7 @@ mod linux {
         Ok(())
     }
 
-    fn map_urgency(urgency: ToastUrgency) -> LibUrgency {
+    const fn map_urgency(urgency: ToastUrgency) -> LibUrgency {
         match urgency {
             ToastUrgency::Low => LibUrgency::Low,
             ToastUrgency::Normal => LibUrgency::Normal,
@@ -130,7 +116,7 @@ mod linux {
         }
     }
 
-    fn map_timeout(timeout: ToastTimeout) -> LibTimeout {
+    const fn map_timeout(timeout: ToastTimeout) -> LibTimeout {
         match timeout {
             ToastTimeout::Default => LibTimeout::Default,
             ToastTimeout::Never => LibTimeout::Never,
@@ -167,24 +153,24 @@ mod linux {
 #[cfg(target_os = "windows")]
 mod windows {
     use alerting::error::NotifyError;
-    use std::path::Path;
     use windows::UI::Notifications::{NotificationSetting, ToastNotificationManager};
     use windows::core::HSTRING;
     use winrt_notification::{Duration as WinDuration, LoopableSound, Scenario, Sound, Toast};
 
     use super::super::{AckAction, ToastTimeout, ToastUrgency};
+    use super::ToastParams;
 
     pub fn send_toast(
-        summary: &str,
-        body: &str,
-        urgency: ToastUrgency,
-        timeout: ToastTimeout,
-        appname: &str,
-        _icon: Option<&Path>,
-        _open_url: Option<&str>,
-        _open_label: &str,
-        _ack_action: Option<AckAction>,
+        params: &ToastParams<'_>,
+        ack_action: Option<&AckAction>,
     ) -> std::result::Result<(), NotifyError> {
+        let _ = ack_action;
+        let summary = params.summary;
+        let body = params.body;
+        let urgency = params.urgency;
+        let timeout = params.timeout;
+        let appname = params.appname;
+
         let app_id = if appname.trim().is_empty() {
             Toast::POWERSHELL_APP_ID
         } else {

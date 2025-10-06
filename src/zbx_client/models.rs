@@ -21,7 +21,7 @@ pub struct HostMeta {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawProblem {
+pub(super) struct RawProblem {
     #[serde(rename = "eventid")]
     pub(crate) event_id: String,
     #[serde(deserialize_with = "deserialize_i64")]
@@ -43,7 +43,7 @@ impl TryFrom<RawProblem> for Problem {
     type Error = Error;
 
     fn try_from(value: RawProblem) -> std::result::Result<Self, Error> {
-        let severity = Severity::from_zabbix(value.severity as i64).ok_or_else(|| {
+        let severity = Severity::from_zabbix(i64::from(value.severity)).ok_or_else(|| {
             Error::Zabbix(ZbxError::InvalidField {
                 field: "severity",
                 message: format!("unexpected severity code {}", value.severity),
@@ -61,13 +61,13 @@ impl TryFrom<RawProblem> for Problem {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct EventWithHosts {
+pub(super) struct EventWithHosts {
     #[serde(default)]
     pub(crate) hosts: Vec<HostRow>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct HostRow {
+pub(super) struct HostRow {
     #[serde(default)]
     host: Option<String>,
     #[serde(default)]
@@ -79,10 +79,10 @@ pub(crate) struct HostRow {
 impl From<HostRow> for HostMeta {
     fn from(value: HostRow) -> Self {
         let HostRow { host, name, status } = value;
-        let display_name = name
-            .clone()
-            .or_else(|| host.clone())
-            .unwrap_or_else(|| "<unknown host>".to_string());
+        let display_name = match (&name, &host) {
+            (Some(value), _) | (None, Some(value)) => value.clone(),
+            (None, None) => "<unknown host>".to_string(),
+        };
         Self {
             host,
             display_name,

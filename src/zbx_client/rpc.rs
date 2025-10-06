@@ -4,7 +4,7 @@ use serde_json::Value;
 const BODY_PREVIEW_LIMIT: usize = 256;
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RpcEnvelope<T> {
+pub(super) struct RpcEnvelope<T> {
     #[allow(dead_code)]
     pub(crate) jsonrpc: String,
     pub(crate) result: Option<T>,
@@ -14,7 +14,7 @@ pub(crate) struct RpcEnvelope<T> {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RpcError {
+pub(super) struct RpcError {
     pub(crate) code: i64,
     pub(crate) message: String,
     #[serde(default)]
@@ -22,7 +22,7 @@ pub(crate) struct RpcError {
 }
 
 #[derive(Serialize)]
-pub(crate) struct RpcRequest<'a> {
+pub(super) struct RpcRequest<'a> {
     pub(crate) jsonrpc: &'static str,
     pub(crate) method: &'a str,
     pub(crate) params: Value,
@@ -30,7 +30,7 @@ pub(crate) struct RpcRequest<'a> {
     pub(crate) auth: &'a str,
 }
 
-pub(crate) fn body_preview(body: &[u8]) -> String {
+pub(super) fn body_preview(body: &[u8]) -> String {
     if body.is_empty() {
         return "<empty>".to_string();
     }

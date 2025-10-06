@@ -11,17 +11,9 @@ use crate::error::ConfigError;
 use crate::types::AckFilter;
 
 use super::defaults::{
-    default_ack_filter,
-    default_concurrency,
-    default_dedup_cache_size,
-    default_limit,
-    default_max_notif,
-    default_notify_appname,
-    default_open_label,
-    default_poll_interval,
-    default_queue_bound,
-    default_rate_limit_max,
-    default_rate_limit_window,
+    default_ack_filter, default_concurrency, default_dedup_cache_size, default_limit,
+    default_max_notif, default_notify_appname, default_open_label, default_poll_interval,
+    default_queue_bound, default_rate_limit_max, default_rate_limit_window,
 };
 use super::env::{env_bool, env_duration, env_parse, env_string};
 use super::{

@@ -13,6 +13,12 @@ use super::ZbxClient;
 use super::models::{EventWithHosts, HostMeta, Problem, RawProblem};
 
 impl ZbxClient {
+    /// Fetch all active problems.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the RPC call fails, the response cannot be
+    /// deserialised, or it misses expected fields.
     pub async fn active_problems(&self, limit: u32, ack: AckFilter) -> Result<Vec<Problem>> {
         let mut params = json!({
             "output": ["eventid","name","severity","clock","lastchange","acknowledged"],
@@ -35,14 +41,29 @@ impl ZbxClient {
         Ok(problems)
     }
 
+    /// Acknowledge a Zabbix event.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors coming from the underlying RPC call.
     pub async fn ack_event(&self, eventid: &str, message: Option<String>) -> Result<()> {
         self.event_update(eventid, true, message).await
     }
 
+    /// Remove an acknowledgement from a Zabbix event.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors coming from the underlying RPC call.
     pub async fn unack_event(&self, eventid: &str, message: Option<String>) -> Result<()> {
         self.event_update(eventid, false, message).await
     }
 
+    /// Resolve host metadata for the provided events.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the RPC call fails for any of the events.
     pub async fn resolve_hosts(
         &self,
         event_ids: &[String],
@@ -56,10 +77,8 @@ impl ZbxClient {
             let client = self.clone();
             let semaphore = Arc::clone(&semaphore);
             tasks.spawn(async move {
-                let permit = semaphore.acquire_owned().await;
-                let _permit = match permit {
-                    Ok(p) => p,
-                    Err(_) => return (idx, Ok(None)),
+                let Ok(_permit) = semaphore.acquire_owned().await else {
+                    return (idx, Ok(None));
                 };
                 let res = client.host_meta_for_event(&event_id).await;
                 (idx, res)
@@ -86,11 +105,11 @@ impl ZbxClient {
         });
         let action = if ack { 2 } else { 16 };
         params["action"] = json!(action);
-        if let Some(msg) = message.as_deref() {
-            if !msg.is_empty() {
-                params["message"] = json!(msg);
-                params["action"] = json!(action + 4);
-            }
+        if let Some(msg) = message.as_deref()
+            && !msg.is_empty()
+        {
+            params["message"] = json!(msg);
+            params["action"] = json!(action + 4);
         }
         let _: Value = self.call("event.acknowledge", params).await?;
         Ok(())

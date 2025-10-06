@@ -12,9 +12,9 @@ use crate::types::AckFilter;
 mod defaults;
 mod env;
 mod raw;
-mod serde;
+pub(crate) mod serde;
 
-pub(crate) use serde::HumantimeDuration;
+pub use serde::HumantimeDuration;
 
 const MAX_NOTIF_BOUNDS: RangeInclusive<usize> = 1..=100;
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
