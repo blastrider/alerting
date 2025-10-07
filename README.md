@@ -99,4 +99,4 @@ Each request is tagged with a correlation id header (`x-correlation-id`) and log
 `just ci` wraps `cargo fmt`, `cargo clippy`, `cargo nextest`, `cargo deny`, `cargo audit`, and `cargo geiger`. Integration tests spawn local mock servers; when sandboxed, grant permission to bind loopback sockets (`cargo test` with escalated permissions in the CI workflow).
 
 ## License
-Licensed under the terms described in `LICENSE`.
+Licensed under the terms described in `LICENSE`. ok
