@@ -1,8 +1,5 @@
-<<<<<<< HEAD
-=======
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
->>>>>>> feat/hardening-observability-ci
 use std::time::Duration;
 
 use alerting::error::{Error as AlertError, ZbxError};
